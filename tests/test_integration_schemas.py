@@ -166,3 +166,31 @@ def test_assert_application_result_raises_on_missing_field():
     del bad["manual_action_required"]
     with pytest.raises(SchemaError):
         assert_application_result(bad)
+
+
+# --- Contract hardening: timestamps must be ISO-8601 (parity with career-ops) ---
+
+
+def test_empty_queue_timestamp_rejected():
+    errors = validate_approved_jobs({**valid_queue(), "generated_at": ""})
+    assert any("generated_at" in e for e in errors)
+
+
+def test_malformed_queue_timestamp_rejected():
+    errors = validate_approved_jobs({**valid_queue(), "generated_at": "2026-10-24 12:00"})
+    assert any("generated_at" in e for e in errors)
+
+
+def test_malformed_job_created_at_rejected():
+    errors = validate_approved_jobs(valid_queue([valid_job(created_at="yesterday")]))
+    assert any("created_at" in e for e in errors)
+
+
+def test_malformed_result_timestamp_rejected():
+    errors = validate_application_result(valid_result(started_at=""))
+    assert any("started_at" in e for e in errors)
+
+
+def test_timestamp_with_offset_accepted():
+    assert validate_approved_jobs({**valid_queue(), "generated_at": "2026-10-24T12:00:00+05:30"}) == []
+    assert validate_application_result(valid_result(started_at="2026-10-24T12:00:00.123Z")) == []
