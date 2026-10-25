@@ -414,6 +414,13 @@ def get_summary() -> Dict[str, Any]:
     }
 
 
+def get_queue_view() -> Dict[str, Any]:
+    """Phase 9: the career-ops queue run (queue + results + claims) for the UI."""
+    from src.integration.queue_dashboard import get_queue_view as _view
+
+    return _view()
+
+
 def get_jobs(status: str | None = None, search: str | None = None) -> List[Dict[str, Any]]:
     return _apply_job_filters(_load_jobs_board(), status=status, search=search)
 

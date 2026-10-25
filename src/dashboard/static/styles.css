@@ -1028,3 +1028,68 @@ input[type="search"]:focus {
     max-height: none;
   }
 }
+
+/* Phase 9 — career-ops queue runs panel */
+.queue-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.queue-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border-bright);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.queue-table-wrap {
+  overflow-x: auto;
+}
+.queue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.queue-table th,
+.queue-table td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.queue-table th {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.queue-table td.reason-preview {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.queue-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border-bright);
+}
+.queue-badge[data-state="applied"],
+.queue-pill[data-state="applied"] { color: #34d399; border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.12); }
+.queue-badge[data-state="needs_review"],
+.queue-pill[data-state="needs_review"] { color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.12); }
+.queue-badge[data-state="failed"],
+.queue-pill[data-state="failed"] { color: #f87171; border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.12); }
+.queue-badge[data-state="in_progress"],
+.queue-pill[data-state="in_progress"] { color: var(--accent); }
+.queue-badge[data-state="pending"],
+.queue-badge[data-state="skipped"],
+.queue-badge[data-state="other"] { color: var(--muted); }

@@ -508,6 +508,92 @@ async function refreshScreenshot() {
   screenshotMeta.textContent = `Last refreshed ${formatDateTime(new Date())}`;
 }
 
+const queueStateLabels = {
+  applied: "Applied",
+  needs_review: "Needs review",
+  failed: "Failed",
+  skipped: "Skipped",
+  pending: "Pending",
+  in_progress: "In progress",
+  other: "Other",
+};
+
+function escapeQueueText(value) {
+  return String(value ?? "").replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]),
+  );
+}
+
+function renderQueue(view) {
+  const summaryEl = document.getElementById("queue-summary");
+  const body = document.getElementById("queue-body");
+  const subtitle = document.getElementById("queue-subtitle");
+  if (!summaryEl || !body) return;
+
+  if (!view || view.configured === false) {
+    summaryEl.classList.add("muted");
+    summaryEl.textContent = "No integration directory configured (set CAREER_OPS_INTEGRATION_DIR).";
+    body.innerHTML = "";
+    if (subtitle) subtitle.textContent = "(career-ops)";
+    return;
+  }
+
+  const summary = view.summary || {};
+  const states = summary.states || {};
+  if (subtitle) {
+    subtitle.textContent = `(${summary.queued ?? 0} queued · ${summary.with_results ?? 0} with results)`;
+  }
+  const pills = Object.entries(states)
+    .map(
+      ([state, n]) =>
+        `<span class="queue-pill" data-state="${state}">${queueStateLabels[state] || state}: ${n}</span>`,
+    )
+    .join("");
+  summaryEl.innerHTML = pills || "No jobs in the queue yet.";
+  summaryEl.classList.toggle("muted", !pills);
+
+  const jobs = view.jobs || [];
+  if (jobs.length === 0) {
+    body.innerHTML =
+      '<tr><td colspan="6" class="muted">No jobs yet. Export a queue and run the bot in queue mode.</td></tr>';
+    return;
+  }
+  body.innerHTML = jobs
+    .map((job) => {
+      const role = escapeQueueText(job.role) || "-";
+      const roleCell = job.canonical_url
+        ? `<a href="${escapeQueueText(job.canonical_url)}" target="_blank" rel="noreferrer">${role}</a>`
+        : role;
+      const reason = job.reason
+        ? `${escapeQueueText(job.reason)}${job.detail ? " — " + escapeQueueText(job.detail) : ""}`
+        : "-";
+      const oldTag = job.in_queue ? "" : ' <span class="queue-pill" data-state="other">prior</span>';
+      return `
+      <tr>
+        <td>${escapeQueueText(job.company) || "-"}${oldTag}</td>
+        <td>${roleCell}</td>
+        <td>${job.career_ops_score ?? "-"}</td>
+        <td><span class="queue-badge" data-state="${job.state}">${queueStateLabels[job.state] || job.state}</span></td>
+        <td>${escapeQueueText(job.result) || "-"}</td>
+        <td class="reason-preview" title="${reason}">${reason}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
+async function refreshQueue() {
+  try {
+    renderQueue(await fetchJson("/api/queue"));
+  } catch (error) {
+    const summaryEl = document.getElementById("queue-summary");
+    if (summaryEl) {
+      summaryEl.classList.add("muted");
+      summaryEl.textContent = "Could not load the queue view.";
+    }
+  }
+}
+
 async function wireControls() {
   document.getElementById("start-run").onclick = async () => {
     await fetchJson("/api/control/start", { method: "POST" });
@@ -520,6 +606,8 @@ async function wireControls() {
   document.getElementById("stop-run").onclick = async () => fetchJson("/api/control/stop", { method: "POST" });
   document.getElementById("refresh-screenshot").onclick = refreshScreenshot;
   refreshJobsButton.onclick = refreshJobs;
+  const refreshQueueButton = document.getElementById("refresh-queue");
+  if (refreshQueueButton) refreshQueueButton.onclick = refreshQueue;
   exportRunButton.onclick = () => {
     if (!selectedRunId) {
       return;
@@ -565,6 +653,7 @@ function startEventStream() {
     }
     refreshSummary();
     refreshRuns();
+    refreshQueue();
     refreshScreenshot();
   });
   source.addEventListener("message", (event) => {
@@ -599,7 +688,7 @@ async function init() {
   try {
     await wireControls();
     wireFilters();
-    await Promise.all([refreshMeta(), refreshSummary(), refreshLive(), refreshJobs(), refreshConfig(), refreshRuns()]);
+    await Promise.all([refreshMeta(), refreshSummary(), refreshLive(), refreshJobs(), refreshConfig(), refreshRuns(), refreshQueue()]);
     if (selectedRunId) {
       await selectRun(selectedRunId);
     } else {

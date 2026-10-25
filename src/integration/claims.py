@@ -62,6 +62,10 @@ class ClaimStore:
         except FileNotFoundError:
             pass
 
+    def is_claimed(self, integration_id: str) -> bool:
+        """True when a claim file exists for the job (held by some run)."""
+        return self._path(integration_id).exists()
+
     def owner(self, integration_id: str) -> Optional[str]:
         """The run_id that holds the claim, or None — for diagnostics."""
         try:
