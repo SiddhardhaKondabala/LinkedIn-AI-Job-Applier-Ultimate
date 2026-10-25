@@ -7,8 +7,9 @@ an injectable ``apply_fn`` (the real one wraps the LinkedIn job manager; tests
 pass a mock), so this orchestration is fully unit-testable without a browser.
 
 Per job, in order: enforce the queue's min score, require a valid LinkedIn URL,
-require the tailored resume to exist, honor pause/stop between jobs, and record
-exactly one ApplicationResult — including for skips and failures.
+require the tailored resume to exist, verify artifact integrity, claim the job
+so no other run double-applies it (Phase 8), honor pause/stop between jobs, and
+record exactly one ApplicationResult — including for skips and failures.
 """
 
 from __future__ import annotations
@@ -18,10 +19,13 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from .artifacts import ArtifactError
+from .claims import KEEP_CLAIM_RESULTS
 from .executor_config import QueueExecutionConfig
 from .queue_models import ApplicationResult, ApprovedJob, utc_now_iso
 
 ApplyFn = Callable[[ApprovedJob, QueueExecutionConfig], Awaitable[ApplicationResult]]
+ClaimFn = Callable[[ApprovedJob, str], bool]
+ReleaseFn = Callable[[ApprovedJob], None]
 
 _LINKEDIN_JOB_RE = re.compile(
     r"^https?://([a-z0-9-]+\.)*linkedin\.com/(?:jobs/view/|comm/jobs/view/)\d+", re.I
@@ -54,6 +58,8 @@ async def process_queue(
     now: Callable[[], str] = utc_now_iso,
     resume_exists: Callable[[str], bool] = lambda p: Path(p).exists(),
     verify_artifacts: Optional[Callable[[ApprovedJob], object]] = None,
+    claim: Optional[ClaimFn] = None,
+    release_claim: Optional[ReleaseFn] = None,
     reraise: tuple = (),
 ) -> list[ApplicationResult]:
     """Run the queue and return one ApplicationResult per job considered.
@@ -136,13 +142,29 @@ async def process_queue(
             )
             continue
 
+        # Claim the job before applying (Phase 8). If another run holds the
+        # claim — or a previous run already attempted it — skip rather than
+        # risk a second application.
+        if claim is not None and not claim(job, config.executor_run_id):
+            record(
+                _result(
+                    job, config, "skipped", now(), now(),
+                    error_code="already_claimed",
+                    error_message=f"already claimed for {job.integration_id}",
+                )
+            )
+            continue
+
         started = now()
         try:
             res = await apply_fn(job, config)
         except reraise:
             # Control-flow signals (e.g. a user/dashboard stop) must halt the run,
-            # not be recorded as a failed application. asyncio.CancelledError is a
-            # BaseException and already propagates past the handler below.
+            # not be recorded as a failed application. The job was never applied,
+            # so release its claim to leave it open for a resume. CancelledError
+            # is a BaseException and already propagates past the handler below.
+            if release_claim is not None:
+                release_claim(job)
             raise
         except Exception as e:  # a crashing executor must still yield a durable result
             res = _result(
@@ -152,5 +174,9 @@ async def process_queue(
             )
         record(res)
         attempted += 1
+        # Keep the claim for a real attempt or a human-needed stop; release it
+        # for a transient outcome (e.g. failed) so a later run can retry.
+        if release_claim is not None and res.result not in KEEP_CLAIM_RESULTS:
+            release_claim(job)
 
     return results
