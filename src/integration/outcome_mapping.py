@@ -2,9 +2,12 @@
 
 The LinkedIn job manager returns a plain ``(status, reason, already_applied)``
 outcome from applying to one job. This module turns that into the canonical
-result value, keeping the browser code free of the bridge vocabulary. Captcha /
-MFA / legal-question detection is heuristic for now (over the reason text);
-Phase 7 strengthens the actual detection.
+result value, keeping the browser code free of the bridge vocabulary.
+
+Phase 7 adds explicit, page-detected statuses — ``ManualReview`` (a sensitive
+question the bot must not auto-answer) and ``Challenge`` (a captcha/MFA/security
+checkpoint) — which carry a precise code and take precedence over the free-text
+heuristics kept below as a fallback for the non-Easy-Apply agent path.
 """
 
 from __future__ import annotations
@@ -51,6 +54,18 @@ def classify_outcome(status: str, reason: str = "", already_applied: bool = Fals
     """
     s = (status or "").strip().lower()
     r = (reason or "").strip().lower()
+
+    # Phase 7 explicit, page-detected signals win over everything else.
+    if s == "manualreview":
+        # reason is the policy category (e.g. "work_authorization").
+        return Classification("manual_review", True, r or "manual_review")
+    if s == "challenge":
+        # reason is the challenge kind: captcha / requires_mfa / security_checkpoint.
+        if r == "captcha":
+            return Classification("captcha", True, "captcha")
+        # A checkpoint or verification step needs the person — treat as MFA,
+        # preserving the precise kind as the error code.
+        return Classification("requires_mfa", True, r or "requires_mfa")
 
     if already_applied or "already applied" in r:
         return Classification("already_applied", False, None)

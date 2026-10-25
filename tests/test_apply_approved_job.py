@@ -106,6 +106,8 @@ async def test_easy_apply_receives_the_approved_artifacts():
 
     assert easy.await_args.kwargs["resume_path"] == "/abs/cv-017.pdf"
     assert easy.await_args.kwargs["cover_letter_path"] == "/abs/cover-017.pdf"
+    # Phase 7: queue mode runs the policy / challenge gate.
+    assert easy.await_args.kwargs["manual_review_gate"] is True
 
 
 async def test_submit_true_runs_easy_apply_without_test_mode():

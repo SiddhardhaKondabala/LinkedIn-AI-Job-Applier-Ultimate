@@ -15,7 +15,13 @@ from reportlab.pdfgen import canvas
 from config.constants import PHOTO_DIR
 from config.logger_config import logger
 from src.dashboard.runtime import StopRequested, capture_page_screenshot, emit_event
-from src.job_manager.easy_applier import BaseEasyApplier, NoInfoException
+from src.job_manager.easy_applier import (
+    BaseEasyApplier,
+    ChallengeDetected,
+    ManualReviewRequired,
+    NoInfoException,
+)
+from src.integration.policy import detect_challenge
 from src.job_manager.resume_anonymizer import ResumeAnonymizer
 from src.llm.llm_manager import GPTAnswerer
 from src.pydantic_models.job_models import Job, Question
@@ -207,6 +213,14 @@ class LinkedInEasyApplier(BaseEasyApplier):
             )
             return "Success", ""
 
+        except ManualReviewRequired as e:
+            # Phase 7: a sensitive question the bot must not auto-answer.
+            logger.info(f"Stopping for manual review ({e.reason}) on {job.job_title}")
+            return "ManualReview", e.reason
+        except ChallengeDetected as e:
+            # Phase 7: captcha / MFA / security checkpoint interrupted the flow.
+            logger.warning(f"Challenge ({e.kind}) on {job.job_title}: {e.detail}")
+            return "Challenge", e.kind
         except NoInfoException as e:
             logger.warning(f"Could not apply to {job.job_title} at {job.company_name}. Reason: {e}")
             return (
@@ -328,11 +342,50 @@ class LinkedInEasyApplier(BaseEasyApplier):
         if continue_applying_button:
             await continue_applying_button.click(timeout=1000)
 
+    async def _detect_page_challenge(self):
+        """Probe the live page for a captcha/MFA/checkpoint interruption.
+
+        Returns a policy.Challenge or None. No-op unless the manual-review gate
+        is on (queue mode). Detection is best-effort — a probe failure returns
+        None rather than blocking the application.
+        """
+        if not getattr(self, "manual_review_gate", False):
+            return None
+        marker_selectors = {
+            "captcha_iframe": "iframe[src*='captcha'], iframe[title*='recaptcha'], "
+            "iframe[title*='hcaptcha'], div.g-recaptcha, #captcha-internal",
+            "mfa_input": "input[autocomplete='one-time-code'], input[name*='verification'], "
+            "input[id*='verification'], input[name*='pin']",
+            "checkpoint_form": "form.challenge-form, #captcha-challenge, div.challenge-dialog",
+        }
+        markers = []
+        for name, selector in marker_selectors.items():
+            try:
+                if await find_element_safely(self.page, selector, "css selector", timeout=500):
+                    markers.append(name)
+            except Exception:
+                continue
+        try:
+            url = self.page.url
+        except Exception:
+            url = None
+        return detect_challenge(url=url, markers=markers)
+
+    async def _raise_if_challenged(self) -> None:
+        """Raise ChallengeDetected when the page shows a captcha/MFA/checkpoint."""
+        challenge = await self._detect_page_challenge()
+        if challenge is not None:
+            logger.warning(f"Page challenge detected: {challenge.kind} ({challenge.detail})")
+            raise ChallengeDetected(challenge.kind, challenge.detail)
+
     async def _fill_application_form(self, job: Job):
         """Fill out application form with loop for multi-step forms (async)"""
         logger.info(f"Filling out application form for job: {job.job_title}")
         while True:
             self.previous_question_texts = []
+            # A captcha/MFA/checkpoint can appear between steps — stop before
+            # touching the form so it is reported, not fought (Phase 7).
+            await self._raise_if_challenged()
             # Fill out application form
             await self._fill_up(job)
             # Check if execution is paused
@@ -636,6 +689,10 @@ class LinkedInEasyApplier(BaseEasyApplier):
                     parent_container = file_input.locator("xpath=../..").first
                     await self._handle_upload_fields(parent_container, job, processed_file_inputs)
                     processed_file_inputs.add(file_input_id)
+        except (ManualReviewRequired, ChallengeDetected):
+            # Phase 7 gate signals must halt the application, not be swallowed
+            # by the "continue on error" handler below.
+            raise
         except NoInfoException:
             raise
         except Exception:
