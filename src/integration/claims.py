@@ -78,6 +78,12 @@ class ClaimStore:
 #: Outcomes that represent a real application attempt or a human-needed stop —
 #: the claim is KEPT so no run applies to the job again. Any other post-apply
 #: outcome (notably ``failed``) releases the claim so a later run can retry.
+#:
+#: Caveat: a failure raised AFTER the form was actually submitted (e.g. an error
+#: reading the confirmation) is classified ``failed`` and releases the claim, so
+#: a retry could submit a second time. The executor avoids this by classifying a
+#: completed submit as ``submitted`` (kept); the residual risk is only a crash
+#: in the narrow window after submit and before the result is recorded.
 KEEP_CLAIM_RESULTS = frozenset(
     {"submitted", "already_applied", "manual_review", "captcha", "requires_mfa", "expired"}
 )

@@ -164,13 +164,19 @@ def build_queue_view(queue_path, results_path, claims_dir) -> dict:
         row.update(_row_from_result(rec))
         rows.append(row)
 
+    # The summary describes the CURRENT queue, so its state counts add up to
+    # `queued`. Rows for results no longer in the queue (in_queue False) still
+    # appear in the table but are counted separately as `prior`, not folded into
+    # the current-queue states or the claimed count.
+    in_queue_rows = [r for r in rows if r.get("in_queue")]
     summary = {
         "queued": len(jobs),
         "with_results": len(results),
-        "claimed": sum(1 for r in rows if r.get("claimed")),
+        "prior": len(rows) - len(in_queue_rows),
+        "claimed": sum(1 for r in in_queue_rows if r.get("claimed")),
         "states": {},
     }
-    for r in rows:
+    for r in in_queue_rows:
         state = r.get("state", "pending")
         summary["states"][state] = summary["states"].get(state, 0) + 1
 

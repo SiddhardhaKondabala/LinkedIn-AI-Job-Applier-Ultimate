@@ -19,6 +19,7 @@ integration adapter maps the resulting codes onto application-result.v1 values.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -69,6 +70,7 @@ _SENSITIVE_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "convicted",
             "conviction",
             "felony",
+            "felonies",
             "misdemeanor",
             "background check",
         ),
@@ -78,8 +80,10 @@ _SENSITIVE_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "gender",
             "ethnicity",
+            "ethnicities",
             "race",
             "disability",
+            "disabilities",
             "veteran",
             "sexual orientation",
             "equal employment",
@@ -104,18 +108,31 @@ _SENSITIVE_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
 #: sensitive-answers config can validate its keys against them.
 SENSITIVE_CATEGORIES: tuple[str, ...] = tuple(c for c, _ in _SENSITIVE_CATEGORIES)
 
+#: Each phrase compiled to a word-boundary regex, with an optional trailing "s"
+#: so a regular plural still matches (visa/visas, veteran/veterans). Plain
+#: substring matching false-positives on short tokens embedded in ordinary words
+#: — "race" in "embrace"/"racetrack", "visa" in "Visalia", "eeo" inside another
+#: word — which would wrongly gate a benign question. The leading boundary keeps
+#: those out; internal punctuation like the "/" in "ts/sci" still matches, and
+#: irregular plurals (disabilities, felonies) are listed explicitly above.
+_SENSITIVE_PATTERNS: tuple[tuple[str, tuple[re.Pattern, ...]], ...] = tuple(
+    (category, tuple(re.compile(rf"\b{re.escape(p)}s?\b") for p in phrases))
+    for category, phrases in _SENSITIVE_CATEGORIES
+)
+
 
 def classify_question(text: Optional[str]) -> Optional[str]:
     """Return the sensitive-question category for ``text``, or None.
 
     A non-None result means the bot must stop and hand this back for manual
-    review instead of auto-answering it.
+    review instead of auto-answering it. Matching is on whole words, so an
+    ordinary question that merely embeds a sensitive token is not flagged.
     """
     if not text:
         return None
     t = text.lower()
-    for category, phrases in _SENSITIVE_CATEGORIES:
-        if any(p in t for p in phrases):
+    for category, patterns in _SENSITIVE_PATTERNS:
+        if any(pat.search(t) for pat in patterns):
             return category
     return None
 

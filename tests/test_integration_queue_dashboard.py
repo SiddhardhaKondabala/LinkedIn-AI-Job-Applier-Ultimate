@@ -129,6 +129,10 @@ def test_result_for_job_not_in_queue_is_marked_prior(tmp_path):
     view = build_queue_view(q, r, tmp_path / "claims")
     prior = [row for row in view["jobs"] if not row["in_queue"]]
     assert len(prior) == 1 and prior[0]["integration_id"] == "linkedin:99"
+    # The prior row is counted separately, not folded into the queue summary.
+    assert view["summary"]["queued"] == 1
+    assert view["summary"]["prior"] == 1
+    assert sum(view["summary"]["states"].values()) == 1  # states cover the queue only
 
 
 def test_missing_files_and_torn_line_are_tolerated(tmp_path):
