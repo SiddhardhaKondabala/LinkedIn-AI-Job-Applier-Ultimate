@@ -947,6 +947,10 @@ class LinkedInEasyApplier(BaseEasyApplier):
                     logger.info("Uploading cover letter")
                     await self._create_and_upload_cover_letter(upload_element, job)
 
+            except (ManualReviewRequired, ChallengeDetected):
+                # Phase 7 gate signals must halt the application, not be
+                # swallowed by the per-element "continue on error" handler.
+                raise
             except Exception as e:
                 logger.warning(f"Failed to process upload element: {e}")
                 await debug_capture(self.page, "upload_element_error")
@@ -1050,6 +1054,13 @@ class LinkedInEasyApplier(BaseEasyApplier):
             logger.info(f"Using career-ops approved cover letter: {file_path_pdf}")
             await self._validate_and_upload_cover_letter(element, file_path_pdf)
             return
+
+        if getattr(self, "manual_review_gate", False):
+            # Queue mode: career-ops supplied no cover letter for this job, but
+            # the form wants one. Never submit an unvetted, LLM-generated cover
+            # letter in place of an approved artifact — stop for manual review.
+            logger.info("Manual-review gate: cover letter required but none approved")
+            raise ManualReviewRequired("cover_letter_required")
 
         cover_letter_text = self.gpt_answerer.write_cover_letter()
         cover_letter_text = self.resume_anonymizer.deanonymize_text(cover_letter_text)

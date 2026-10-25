@@ -29,6 +29,38 @@ def test_classify_question_ignores_ordinary_and_empty():
     assert classify_question(None) is None
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Do you embrace our engineering culture?",   # 'race' inside 'embrace'
+        "How close is the office to the racetrack?",  # 'race' inside 'racetrack'
+        "Are you open to relocating to Visalia, CA?",  # 'visa' inside 'Visalia'
+        "Describe a project you are proud of.",        # no sensitive token
+    ],
+)
+def test_classify_question_does_not_false_positive_on_embedded_tokens(text):
+    assert classify_question(text) is None
+
+
+def test_classify_question_still_matches_whole_words_with_punctuation():
+    assert classify_question("Do you hold a TS/SCI clearance?") == "security_clearance"
+    assert classify_question("Are you a protected veteran?") == "demographic"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Do you require any visas to work here?", "sponsorship"),      # regular plural
+        ("Are you one of our protected veterans?", "demographic"),      # regular plural
+        ("Do you have any disabilities?", "demographic"),               # irregular plural
+        ("Have you had any felonies?", "legal_history"),                # irregular plural
+        ("Do you need sponsorships for multiple roles?", "sponsorship"),
+    ],
+)
+def test_classify_question_matches_plurals(text, expected):
+    assert classify_question(text) == expected
+
+
 def test_work_authorization_wins_over_sponsorship_ordering():
     # A question naming both: the more fundamental category is reported.
     assert (
@@ -193,3 +225,32 @@ def test_configured_answer_ignored_when_gate_disabled():
     a.set_sensitive_answers({"salary_expectation": "150000"})
     # Gate off -> no sensitive injection, ordinary cache lookup (miss) returns None.
     assert a._find_cached_question("What is your expected salary?", "textbox") is None
+
+
+@pytest.mark.asyncio
+async def test_queue_mode_stops_for_manual_review_when_no_approved_cover_letter():
+    # Review fix: never generate an unvetted LLM cover letter in queue mode.
+    a = _applier(gate=True)
+    a.set_pinned_artifacts(resume_path="/abs/cv.pdf", cover_letter_path=None)
+    job = MagicMock(company_name="Acme", job_title="Staff Engineer")
+    with pytest.raises(ManualReviewRequired) as ei:
+        await a._create_and_upload_cover_letter(MagicMock(), job)
+    assert ei.value.reason == "cover_letter_required"
+    # The LLM cover-letter generator must not have been called.
+    a.gpt_answerer.write_cover_letter.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_standalone_still_generates_cover_letter():
+    # Gate off (standalone search): behaviour unchanged — it does NOT raise for
+    # manual review; it proceeds to the LLM generator. A sentinel on the
+    # generator proves we reached it (and avoids writing a real PDF).
+    a = _applier(gate=False)
+    job = MagicMock(company_name="Acme", job_title="Staff Engineer")
+
+    class _Reached(Exception):
+        pass
+
+    a.gpt_answerer.write_cover_letter.side_effect = _Reached
+    with pytest.raises(_Reached):
+        await a._create_and_upload_cover_letter(MagicMock(), job)

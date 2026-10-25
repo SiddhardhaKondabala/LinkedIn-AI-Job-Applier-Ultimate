@@ -525,6 +525,13 @@ function escapeQueueText(value) {
   );
 }
 
+// Only http(s) URLs are turned into links — never a javascript:/data: URL that
+// might arrive in queue data. Returns the escaped URL, or "" to render as text.
+function safeHttpUrl(value) {
+  const url = String(value ?? "").trim();
+  return /^https?:\/\//i.test(url) ? escapeQueueText(url) : "";
+}
+
 function renderQueue(view) {
   const summaryEl = document.getElementById("queue-summary");
   const body = document.getElementById("queue-body");
@@ -542,7 +549,8 @@ function renderQueue(view) {
   const summary = view.summary || {};
   const states = summary.states || {};
   if (subtitle) {
-    subtitle.textContent = `(${summary.queued ?? 0} queued · ${summary.with_results ?? 0} with results)`;
+    const prior = summary.prior ? ` · ${summary.prior} prior` : "";
+    subtitle.textContent = `(${summary.queued ?? 0} queued · ${summary.with_results ?? 0} with results${prior})`;
   }
   const pills = Object.entries(states)
     .map(
@@ -562,8 +570,9 @@ function renderQueue(view) {
   body.innerHTML = jobs
     .map((job) => {
       const role = escapeQueueText(job.role) || "-";
-      const roleCell = job.canonical_url
-        ? `<a href="${escapeQueueText(job.canonical_url)}" target="_blank" rel="noreferrer">${role}</a>`
+      const href = safeHttpUrl(job.canonical_url);
+      const roleCell = href
+        ? `<a href="${href}" target="_blank" rel="noreferrer">${role}</a>`
         : role;
       const reason = job.reason
         ? `${escapeQueueText(job.reason)}${job.detail ? " — " + escapeQueueText(job.detail) : ""}`
