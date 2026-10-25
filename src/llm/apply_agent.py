@@ -111,6 +111,46 @@ class ApplyAgent:
         """Add resume for analysis."""
         self.resume_readable = resume_readable
 
+    def _build_task(self, job_url: str, resume_pdf_path: str) -> str:
+        """Build the browser-agent task prompt for applying to one job.
+
+        SECURITY: this never constructs an account password (the old version
+        derived one from the email local-part, which is a credential-handling
+        risk). Account registration is a hard stop for manual user action.
+        """
+        return f"""
+        - Your goal is to apply to the job at: {job_url}
+        - Use the information from my resume (source of truth) and any additional information already present on the page.
+        - If you cannot apply, finish the task (do not try different URLs).
+
+        - Follow these instructions carefully:
+            - If anything pops up that blocks the form, close it and continue.
+            - Do not skip required fields. If an optional field is present, fill it if possible using my resume/context.
+            - Fill the form from top to bottom; do not skip a field to come back later.
+            - Some text boxes may have dropdown suggestions: after filling a textbox, check for a dropdown and select the correct option.
+
+        - Resume:
+            - You may upload my resume PDF when the application asks for it.
+            - The resume file is available as: {resume_pdf_path}
+            - Prefer using the built-in upload_file_to_element action; if the page flow needs it, you can use the upload_resume tool to produce an UploadFileAction.
+
+        - If you are asked to register or create an account, DO NOT create one and DO NOT enter or invent any password. Stop and report in your final_result that account registration is required so the user can complete it manually.
+
+        - If an email verification or confirmation step appears, call the wait_for_email_verification tool immediately — do NOT give up or mark the task as failed. After the tool returns, continue the application.
+
+        - Before you start, create a step-by-step plan to complete the entire application. Delegate a step for each field/section you encounter.
+
+        *** IMPORTANT ***
+            - You are not done until you have either submitted the application OR confirmed you cannot apply.
+            - At the end, structure your final_result as:
+                1) a human-readable summary of all detections and actions performed
+                2) a list of all questions encountered on the page (including any screening questions)
+                3) a short final human-readable summary at the very end
+
+        ## My resume text (source of truth):
+        {self.resume_readable}
+        """
+
     async def apply(self, job_url: str) -> None:
         """Apply to the job using AI Agent"""
         resume_pdf_path = str(get_ready_made_resume())
@@ -145,38 +185,7 @@ class ApplyAgent:
             logger.info(f"Browser session saved to {browser_storage_state}")
             return "User confirmed email verification. Browser session saved. Proceeding with the application."
 
-        task = f"""
-        - Your goal is to apply to the job at: {job_url}
-        - Use the information from my resume (source of truth) and any additional information already present on the page.
-        - If you cannot apply, finish the task (do not try different URLs).
-
-        - Follow these instructions carefully:
-            - If anything pops up that blocks the form, close it and continue.
-            - Do not skip required fields. If an optional field is present, fill it if possible using my resume/context.
-            - Fill the form from top to bottom; do not skip a field to come back later.
-            - Some text boxes may have dropdown suggestions: after filling a textbox, check for a dropdown and select the correct option.
-
-        - Resume:
-            - You may upload my resume PDF when the application asks for it.
-            - The resume file is available as: {resume_pdf_path}
-            - Prefer using the built-in upload_file_to_element action; if the page flow needs it, you can use the upload_resume tool to produce an UploadFileAction.
-
-        - If you are asked to register an account, use my email: {self.user_email} and password: {self.user_email.split("@")[0] + "123456" if self.user_email else "unknown"}
-
-        - If an email verification or confirmation step appears, call the wait_for_email_verification tool immediately — do NOT give up or mark the task as failed. After the tool returns, continue the application.
-
-        - Before you start, create a step-by-step plan to complete the entire application. Delegate a step for each field/section you encounter.
-
-        *** IMPORTANT ***
-            - You are not done until you have either submitted the application OR confirmed you cannot apply.
-            - At the end, structure your final_result as:
-                1) a human-readable summary of all detections and actions performed
-                2) a list of all questions encountered on the page (including any screening questions)
-                3) a short final human-readable summary at the very end
-
-        ## My resume text (source of truth):
-        {self.resume_readable}
-        """
+        task = self._build_task(job_url, resume_pdf_path)
 
         available_file_paths = [resume_pdf_path]
 
