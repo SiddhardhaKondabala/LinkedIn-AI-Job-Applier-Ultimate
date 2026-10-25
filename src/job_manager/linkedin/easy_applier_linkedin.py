@@ -986,6 +986,14 @@ class LinkedInEasyApplier(BaseEasyApplier):
     async def _create_and_upload_cover_letter(self, element: Any, job: Job) -> None:
         logger.info("Starting the process of creating and uploading cover letter.")
 
+        if getattr(self, "pinned_cover_letter_path", None) is not None:
+            # Queue mode: upload the exact career-ops-approved cover letter,
+            # verified against the queued SHA-256 before the browser started.
+            file_path_pdf = os.path.abspath(str(self.pinned_cover_letter_path))
+            logger.info(f"Using career-ops approved cover letter: {file_path_pdf}")
+            await self._validate_and_upload_cover_letter(element, file_path_pdf)
+            return
+
         cover_letter_text = self.gpt_answerer.write_cover_letter()
         cover_letter_text = self.resume_anonymizer.deanonymize_text(cover_letter_text)
 
@@ -1056,6 +1064,13 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 logger.error(f"Traceback: {tb_str}")
                 raise
 
+        await self._validate_and_upload_cover_letter(element, file_path_pdf)
+
+    async def _validate_and_upload_cover_letter(self, element: Any, file_path_pdf: str) -> None:
+        """Enforce LinkedIn's size/format limits, then upload the cover letter.
+
+        Shared by the generated and the career-ops-pinned (Phase 6) paths.
+        """
         file_size = os.path.getsize(file_path_pdf)
         max_file_size = 2 * 1024 * 1024  # 2 MB
         logger.debug(f"Cover letter file size: {file_size} bytes")

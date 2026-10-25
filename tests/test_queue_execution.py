@@ -7,6 +7,7 @@ gating, safety, ordering, and result mapping with a mock apply_fn — no browser
 
 import pytest
 
+from src.integration.artifacts import ArtifactError
 from src.integration.executor_config import QueueExecutionConfig
 from src.integration.queue_models import ApplicationResult, ApprovedJob
 from src.integration.queue_runner import is_valid_linkedin_url, process_queue
@@ -96,6 +97,35 @@ async def test_missing_resume_fails_safely():
     assert results[0].result == "invalid"
     assert results[0].error_code == "missing_resume"
     assert calls == []
+
+
+async def test_artifact_hash_mismatch_is_manual_review_not_applied():
+    # Phase 6: a resume whose bytes no longer match the approved SHA-256 must
+    # never be uploaded — stop for manual review.
+    apply_fn, calls = recorder()
+
+    def verify(_job):
+        raise ArtifactError(
+            "resume_hash_mismatch", "changed since approval", result="manual_review"
+        )
+
+    results = await process_queue(
+        [make_job()], apply_fn, cfg(), resume_exists=ALWAYS, verify_artifacts=verify
+    )
+    assert results[0].result == "manual_review"
+    assert results[0].error_code == "resume_hash_mismatch"
+    assert results[0].manual_action_required is True
+    assert calls == []
+
+
+async def test_artifact_verification_passing_lets_the_job_apply():
+    # Phase 6: when the integrity gate passes, the job applies normally.
+    apply_fn, calls = recorder()
+    results = await process_queue(
+        [make_job()], apply_fn, cfg(), resume_exists=ALWAYS, verify_artifacts=lambda _job: None
+    )
+    assert results[0].result == "submitted"
+    assert len(calls) == 1
 
 
 async def test_dry_run_never_calls_apply():

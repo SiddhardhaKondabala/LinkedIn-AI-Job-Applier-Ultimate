@@ -37,6 +37,10 @@ class ApprovedJob:
     application_status: str
     created_at: str
     requisition_id: Optional[str] = None
+    #: Hex SHA-256 of the exact artifact career-ops approved, or None. The
+    #: executor recomputes and compares before upload (Phase 6).
+    resume_sha256: Optional[str] = None
+    cover_letter_sha256: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "ApprovedJob":
@@ -55,6 +59,8 @@ class ApprovedJob:
             application_status=d["application_status"],
             created_at=d["created_at"],
             requisition_id=d.get("requisition_id"),
+            resume_sha256=d.get("resume_sha256"),
+            cover_letter_sha256=d.get("cover_letter_sha256"),
         )
 
 
@@ -80,6 +86,10 @@ class ApplicationResult:
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     manual_action_required: bool = False
+    #: The artifact hashes echoed back from the queue, so the imported result
+    #: records exactly which resume/cover letter the executor used (Phase 6).
+    resume_sha256: Optional[str] = None
+    cover_letter_sha256: Optional[str] = None
 
     @classmethod
     def for_job(
@@ -105,6 +115,8 @@ class ApplicationResult:
             career_ops_score=job.career_ops_score,
             resume_path=job.resume_path,
             cover_letter_path=job.cover_letter_path,
+            resume_sha256=kw.pop("resume_sha256", job.resume_sha256),
+            cover_letter_sha256=kw.pop("cover_letter_sha256", job.cover_letter_sha256),
             **kw,
         )
 
@@ -130,4 +142,6 @@ class ApplicationResult:
             "error_code": self.error_code,
             "error_message": self.error_message,
             "manual_action_required": self.manual_action_required,
+            "resume_sha256": self.resume_sha256,
+            "cover_letter_sha256": self.cover_letter_sha256,
         }

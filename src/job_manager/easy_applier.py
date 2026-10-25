@@ -23,6 +23,16 @@ class BaseEasyApplier(ABC):
         self.submitted_resume_path = None
         self.already_applied_at = None
         self.already_applied_at_text = None
+        # Phase 6 artifact handoff: when queue mode pins the exact career-ops
+        # resume/cover letter, upload those files verbatim instead of generating
+        # or anonymizing a new one. None means the normal generate/ready-made path.
+        self.pinned_resume_path = None
+        self.pinned_cover_letter_path = None
+
+    def set_pinned_artifacts(self, resume_path=None, cover_letter_path=None) -> None:
+        """Pin the exact resume/cover letter to upload (career-ops queue mode)."""
+        self.pinned_resume_path = resume_path
+        self.pinned_cover_letter_path = cover_letter_path
 
     @abstractmethod
     async def apply_to_job(self, job: Job) -> None:
@@ -62,7 +72,13 @@ class BaseEasyApplier(ABC):
             logger.error(f"Failed to create directory: {self.generated_resume_dir}. Error: {e}")
             raise
 
-        if self.ready_made_resume_path is not None:
+        if getattr(self, "pinned_resume_path", None) is not None:
+            # Queue mode: upload the exact career-ops-approved resume, no
+            # generation or anonymization. Existence/integrity were already
+            # verified against the queued SHA-256 before the browser started.
+            file_path_pdf = os.path.abspath(str(self.pinned_resume_path))
+            logger.info(f"Using career-ops approved resume: {file_path_pdf}")
+        elif self.ready_made_resume_path is not None:
             file_path_pdf = os.path.abspath(str(self.ready_made_resume_path))
             logger.info(f"Using ready-made resume: {file_path_pdf}")
         else:

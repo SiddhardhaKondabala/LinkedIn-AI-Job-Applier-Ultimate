@@ -76,6 +76,38 @@ async def test_applies_without_search_and_test_mode_when_not_submitting():
     jm.llm_answerer_component.job_is_interesting.assert_not_called()
 
 
+async def test_easy_apply_receives_the_approved_artifacts():
+    # Phase 6: the exact career-ops resume/cover letter are handed to Easy Apply.
+    jm, _ = make_jm()
+    easy = AsyncMock(return_value=("Success", ""))
+    job = ApprovedJob.from_dict(
+        {
+            "integration_id": "linkedin:4012345678",
+            "canonical_url": "https://www.linkedin.com/jobs/view/4012345678",
+            "company": "Acme",
+            "role": "Staff Engineer",
+            "career_ops_score": 4.2,
+            "evaluation_confidence": "high",
+            "report_number": 17,
+            "report_path": "reports/17.md",
+            "resume_path": "/abs/cv-017.pdf",
+            "cover_letter_path": "/abs/cover-017.pdf",
+            "source": "linkedin",
+            "application_status": "approved",
+            "created_at": "2026-10-24T12:00:00Z",
+        }
+    )
+    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch.object(
+        jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())
+    ), patch.object(jm, "_check_apply_button", new=AsyncMock(return_value=None)), patch.object(
+        jm, "easy_apply", new=easy
+    ):
+        await jm.apply_approved_job(job, should_submit=True)
+
+    assert easy.await_args.kwargs["resume_path"] == "/abs/cv-017.pdf"
+    assert easy.await_args.kwargs["cover_letter_path"] == "/abs/cover-017.pdf"
+
+
 async def test_submit_true_runs_easy_apply_without_test_mode():
     jm, _ = make_jm()
     easy = AsyncMock(return_value=("Success", ""))

@@ -69,6 +69,7 @@ from src.utils.utils import (
 from src.integration.cli import parse_queue_args, queue_config_from_args
 from src.integration.queue_loader import load_queue, queue_min_score
 from src.integration.queue_runner import process_queue
+from src.integration.artifacts import preflight_artifacts, resolve_job_artifacts
 from src.integration.executor_adapter import make_apply_fn
 from src.integration.result_writer import ResultWriter
 
@@ -473,6 +474,7 @@ async def _run_queue(
         queue_run["config"],
         pause_checker=pause_checker,
         on_result=(writer.append if writer else None),
+        verify_artifacts=resolve_job_artifacts,  # Phase 6 per-job integrity gate
         reraise=(StopRequested,),  # a stop must halt the run, not become a failed result
     )
     logger.info(
@@ -500,6 +502,22 @@ async def run_queue_mode(args) -> bool:
         f"[queue] Loaded {len(jobs)} approved job(s); min_score={config.min_score}, "
         f"submit={config.should_submit}, dry_run={config.dry_run}"
     )
+
+    # Phase 6: verify every approved artifact (resume/cover letter exists and
+    # still matches its SHA-256) BEFORE launching the browser, so a missing or
+    # swapped file is reported up front. Problem jobs still get a durable result
+    # from the per-job runner gate, so the good jobs in the queue proceed.
+    problems = preflight_artifacts(jobs)
+    for job, err in problems:
+        logger.warning(
+            f"[queue] Artifact preflight failed for {job.integration_id} "
+            f"({job.company} — {job.role}): {err}"
+        )
+    if problems:
+        logger.warning(
+            f"[queue] {len(problems)}/{len(jobs)} job(s) have artifact problems; "
+            "they will be recorded for manual review and skipped during the run."
+        )
 
     queue_run = {
         "jobs": jobs,
