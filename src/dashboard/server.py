@@ -15,6 +15,7 @@ from src.dashboard.data_service import (
     get_jobs_payload,
     get_live_state,
     get_messages,
+    get_queue_view,
     get_run_detail,
     get_run_events,
     get_run_history,
@@ -95,6 +96,11 @@ async def meta() -> JSONResponse:
 @app.get("/api/summary")
 async def summary() -> JSONResponse:
     return JSONResponse(get_summary())
+
+
+@app.get("/api/queue")
+async def queue_view() -> JSONResponse:
+    return JSONResponse(get_queue_view())
 
 
 @app.get("/api/jobs")

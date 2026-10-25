@@ -133,6 +133,29 @@
       <div id="screenshot-history" class="screenshot-history muted">Select a run to see its screenshots.</div>
     </section>
 
+    <section class="panel" id="queue-panel">
+      <div class="section-header">
+        <h2>Queue Runs <span class="section-count" id="queue-subtitle">(career-ops)</span></h2>
+        <button id="refresh-queue" class="secondary small">Refresh</button>
+      </div>
+      <div id="queue-summary" class="queue-summary muted">Loading queue run…</div>
+      <div class="queue-table-wrap">
+        <table class="queue-table">
+          <thead>
+            <tr>
+              <th>Company</th>
+              <th>Role</th>
+              <th>Score</th>
+              <th>State</th>
+              <th>Result</th>
+              <th>Reason / detail</th>
+            </tr>
+          </thead>
+          <tbody id="queue-body"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="grid-board">
       <div class="panel jobs-board-panel">
         <div class="section-header">
