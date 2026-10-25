@@ -49,12 +49,23 @@ async def process_queue(
     config: QueueExecutionConfig,
     *,
     pause_checker: Optional[Callable[[], Awaitable[None]]] = None,
+    on_result: Optional[Callable[[ApplicationResult], None]] = None,
     now: Callable[[], str] = utc_now_iso,
     resume_exists: Callable[[str], bool] = lambda p: Path(p).exists(),
 ) -> list[ApplicationResult]:
-    """Run the queue and return one ApplicationResult per job considered."""
+    """Run the queue and return one ApplicationResult per job considered.
+
+    on_result, when given, is called with each result the moment it is produced
+    (before the next job), so a durable writer can persist it incrementally and
+    an interruption still leaves records for the finished jobs.
+    """
     results: list[ApplicationResult] = []
     attempted = 0
+
+    def record(res: ApplicationResult) -> None:
+        results.append(res)
+        if on_result is not None:
+            on_result(res)
 
     for job in jobs:
         if config.max_jobs is not None and attempted >= config.max_jobs:
@@ -63,7 +74,7 @@ async def process_queue(
             await pause_checker()
 
         if job.career_ops_score < config.min_score:
-            results.append(
+            record(
                 _result(
                     job, config, "skipped", now(), now(),
                     error_code="below_min_score",
@@ -73,7 +84,7 @@ async def process_queue(
             continue
 
         if not is_valid_linkedin_url(job.canonical_url):
-            results.append(
+            record(
                 _result(
                     job, config, "invalid", now(), now(),
                     error_code="invalid_linkedin_url",
@@ -84,7 +95,7 @@ async def process_queue(
             continue
 
         if not resume_exists(job.resume_path):
-            results.append(
+            record(
                 _result(
                     job, config, "invalid", now(), now(),
                     error_code="missing_resume",
@@ -95,7 +106,7 @@ async def process_queue(
             continue
 
         if config.dry_run:
-            results.append(
+            record(
                 _result(
                     job, config, "skipped", now(), now(),
                     error_code="dry_run",
@@ -113,7 +124,7 @@ async def process_queue(
                 error_code="executor_exception",
                 error_message=str(e),
             )
-        results.append(res)
+        record(res)
         attempted += 1
 
     return results
