@@ -4,7 +4,7 @@ import traceback
 from datetime import timedelta
 from inspect import isawaitable
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from playwright.sync_api import Page
 
@@ -421,12 +421,23 @@ class LinkedInJobManager(BaseJobManager):
                 else:
                     raise
 
-    async def easy_apply(self, job: Job, test_mode: bool = TEST_MODE) -> Tuple[str, str]:
+    async def easy_apply(
+        self,
+        job: Job,
+        test_mode: bool = TEST_MODE,
+        *,
+        resume_path: Optional[str] = None,
+        cover_letter_path: Optional[str] = None,
+    ) -> Tuple[str, str]:
         """Apply to the vacancy using LinkedIn Easy Apply functionality (async).
 
         test_mode fills the application but never clicks the final submit. It
         defaults to the global TEST_MODE for the search flow; queue mode passes
         ``not should_submit`` so a queue run honors --submit/--test-mode.
+
+        resume_path/cover_letter_path pin the exact career-ops artifacts to
+        upload (queue mode, Phase 6); when None the normal generate/ready-made
+        resume path is used.
         """
         easy_applier_component = LinkedInEasyApplier(
             self.page,
@@ -439,6 +450,10 @@ class LinkedInJobManager(BaseJobManager):
             COVER_LETTER_DIR,
             test_mode,
         )
+        if resume_path is not None or cover_letter_path is not None:
+            easy_applier_component.set_pinned_artifacts(
+                resume_path=resume_path, cover_letter_path=cover_letter_path
+            )
         easy_applier_component.set_page(self.page)
         apply_result, self.submitted_resume_path = await easy_applier_component.apply_to_job(job)
         applied_at = getattr(easy_applier_component, "already_applied_at", None)
@@ -503,7 +518,14 @@ class LinkedInJobManager(BaseJobManager):
                     }
                 status, reason = await self.llm_agent_component.apply_to_job(apply_url)
             else:
-                status, reason = await self.easy_apply(job, test_mode=not should_submit)
+                # Phase 6: upload the exact career-ops resume/cover letter for
+                # this approved job, not a bot-generated one.
+                status, reason = await self.easy_apply(
+                    job,
+                    test_mode=not should_submit,
+                    resume_path=approved_job.resume_path,
+                    cover_letter_path=approved_job.cover_letter_path,
+                )
 
             return {
                 "status": status,

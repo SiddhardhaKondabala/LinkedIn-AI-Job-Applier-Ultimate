@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from .artifacts import ArtifactError
 from .executor_config import QueueExecutionConfig
 from .queue_models import ApplicationResult, ApprovedJob, utc_now_iso
 
@@ -52,6 +53,7 @@ async def process_queue(
     on_result: Optional[Callable[[ApplicationResult], None]] = None,
     now: Callable[[], str] = utc_now_iso,
     resume_exists: Callable[[str], bool] = lambda p: Path(p).exists(),
+    verify_artifacts: Optional[Callable[[ApprovedJob], object]] = None,
     reraise: tuple = (),
 ) -> list[ApplicationResult]:
     """Run the queue and return one ApplicationResult per job considered.
@@ -105,6 +107,24 @@ async def process_queue(
                 )
             )
             continue
+
+        # Integrity gate (Phase 6): confirm the queued resume/cover letter still
+        # match the exact bytes career-ops approved before we drive the browser.
+        # Opt-in so unit tests with synthetic paths stay browser- and disk-free;
+        # main wires the real resolver and also preflights the whole queue.
+        if verify_artifacts is not None:
+            try:
+                verify_artifacts(job)
+            except ArtifactError as e:
+                record(
+                    _result(
+                        job, config, e.result, now(), now(),
+                        error_code=e.error_code,
+                        error_message=str(e),
+                        manual_action_required=e.manual_action_required,
+                    )
+                )
+                continue
 
         if config.dry_run:
             record(
