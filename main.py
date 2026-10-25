@@ -1,7 +1,6 @@
 """This module is used to run the LinkedIn/Indeed bot"""
 
 import asyncio
-import json
 import os
 import traceback
 from pathlib import Path
@@ -71,7 +70,7 @@ from src.integration.cli import parse_queue_args, queue_config_from_args
 from src.integration.queue_loader import load_queue, queue_min_score
 from src.integration.queue_runner import process_queue
 from src.integration.executor_adapter import make_apply_fn
-from src.integration.schemas import assert_application_result
+from src.integration.result_writer import ResultWriter
 
 # Create necessary directories if they don't exist
 os.makedirs(RESUME_DIR, exist_ok=True)
@@ -464,28 +463,21 @@ async def _run_queue(
     if not resume_ready_made:
         apply_component.set_resume_generator_manager(resume_generator_manager)
 
+    # Write each result the moment its job finishes, so an interruption still
+    # leaves durable records; the writer is idempotent on (run, job).
+    writer = ResultWriter(queue_run["results_path"]) if queue_run.get("results_path") else None
     apply_fn = make_apply_fn(apply_component, allow_external=queue_run["allow_external"])
     results = await process_queue(
-        queue_run["jobs"], apply_fn, queue_run["config"], pause_checker=pause_checker
+        queue_run["jobs"],
+        apply_fn,
+        queue_run["config"],
+        pause_checker=pause_checker,
+        on_result=(writer.append if writer else None),
     )
-    _write_results(queue_run.get("results_path"), results)
     logger.info(
         f"[queue] Processed {len(results)} job(s); results -> {queue_run.get('results_path')}"
     )
     return results
-
-
-def _write_results(path, results) -> None:
-    """Write results as application-result.v1 JSONL (Phase 4 makes this durable/idempotent)."""
-    if not path:
-        return
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w", encoding="utf-8") as f:
-        for r in results:
-            d = r.to_dict()
-            assert_application_result(d)  # never write a result that violates the contract
-            f.write(json.dumps(d) + "\n")
 
 
 async def run_queue_mode(args) -> bool:
