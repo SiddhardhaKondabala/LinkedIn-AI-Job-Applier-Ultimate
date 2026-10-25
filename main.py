@@ -1,6 +1,7 @@
 """This module is used to run the LinkedIn/Indeed bot"""
 
 import asyncio
+import json
 import os
 import traceback
 from pathlib import Path
@@ -66,6 +67,11 @@ from src.utils.utils import (
     save_yaml_file,
     validate_and_prompt_resume_completion,
 )
+from src.integration.cli import parse_queue_args, queue_config_from_args
+from src.integration.queue_loader import load_queue, queue_min_score
+from src.integration.queue_runner import process_queue
+from src.integration.executor_adapter import make_apply_fn
+from src.integration.schemas import assert_application_result
 
 # Create necessary directories if they don't exist
 os.makedirs(RESUME_DIR, exist_ok=True)
@@ -267,8 +273,10 @@ async def create_and_run_bot(
     secrets: dict,
     resume_text: str,
     resume_structured: dict,
+    queue_run: dict = None,
 ):
-    """Start LinkedIn bot (async)"""
+    """Start LinkedIn bot (async). When queue_run is given, process a career-ops
+    approved queue instead of searching."""
     logger.info("Initializing LinkedIn bot...")
     # Fresh shutdown state per run (matters when RESTART_EVERY_DAY loops runs)
     runtime_controller.set_shutdown_state(ShutdownState.RUNNING)
@@ -361,6 +369,24 @@ async def create_and_run_bot(
         bot.set_parameters(search_config)
         bot.set_pause_checker(check_pause)
 
+        # Queue mode: apply to the career-ops approved queue, no search / no
+        # daily-window check / no resume prompt.
+        if queue_run is not None:
+            await _run_queue(
+                apply_component,
+                llm_answerer_component,
+                llm_agent_component,
+                resume_structured,
+                resume_text_anonymized,
+                resume_generator_manager,
+                resume_ready_made,
+                search_config,
+                queue_run,
+                check_pause,
+            )
+            emit_event("run_completed", "Queue-mode run completed successfully")
+            return True
+
         # Check if the last search was less than a day ago (LinkedIn only)
         if (
             RESTART_EVERY_DAY
@@ -415,7 +441,96 @@ async def create_and_run_bot(
             runtime_controller.finish_run()
 
 
+async def _run_queue(
+    apply_component,
+    llm_answerer,
+    llm_agent,
+    resume_structured,
+    resume_text_anonymized,
+    resume_generator_manager,
+    resume_ready_made,
+    search_config,
+    queue_run,
+    pause_checker,
+):
+    """Wire the apply component and run the approved queue (no search)."""
+    # Queue mode never searches, so wire the apply component directly instead of
+    # going through the search-first BotFacade ordering.
+    llm_answerer.set_search_parameters(search_config)
+    llm_answerer.set_resume(resume_structured, resume_text_anonymized)
+    apply_component.set_answerer_and_agent(llm_answerer, llm_agent)
+    apply_component.set_resume(resume_structured)
+    apply_component.set_pause_checker(pause_checker)
+    if not resume_ready_made:
+        apply_component.set_resume_generator_manager(resume_generator_manager)
+
+    apply_fn = make_apply_fn(apply_component, allow_external=queue_run["allow_external"])
+    results = await process_queue(
+        queue_run["jobs"], apply_fn, queue_run["config"], pause_checker=pause_checker
+    )
+    _write_results(queue_run.get("results_path"), results)
+    logger.info(
+        f"[queue] Processed {len(results)} job(s); results -> {queue_run.get('results_path')}"
+    )
+    return results
+
+
+def _write_results(path, results) -> None:
+    """Write results as application-result.v1 JSONL (Phase 4 makes this durable/idempotent)."""
+    if not path:
+        return
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        for r in results:
+            d = r.to_dict()
+            assert_application_result(d)  # never write a result that violates the contract
+            f.write(json.dumps(d) + "\n")
+
+
+async def run_queue_mode(args) -> bool:
+    """Queue mode: apply to a career-ops approved queue instead of searching."""
+    config_validator = ConfigValidator()
+    secrets = config_validator.validate_secrets()
+    search_config = config_validator.validate_search_config(SEARCH_CONFIG_FILE)
+    resume_text = config_validator.validate_resume_text(RESUME_TEXT_FILE)
+    if not resume_text:
+        resume_text = generate_resume_text_from_pdf(secrets)
+    resume_structured = config_validator.validate_resume_structured(RESUME_STRUCTURED_FILE)
+    if not resume_text and not resume_structured:
+        raise FileNotFoundError("Resume not found for queue-mode run")
+
+    # Load + validate the queue BEFORE any browser work (fail fast on a bad queue).
+    doc, jobs = load_queue(args.approved_jobs)
+    config = queue_config_from_args(args, default_min_score=queue_min_score(doc))
+    logger.info(
+        f"[queue] Loaded {len(jobs)} approved job(s); min_score={config.min_score}, "
+        f"submit={config.should_submit}, dry_run={config.dry_run}"
+    )
+
+    queue_run = {
+        "jobs": jobs,
+        "config": config,
+        "results_path": args.results,
+        "allow_external": bool(args.allow_external),
+    }
+    return await create_and_run_bot(
+        search_config, secrets, resume_text, resume_structured, queue_run=queue_run
+    )
+
+
 def main() -> None:
+    args = parse_queue_args()
+
+    # Queue mode runs once (no daily restart loop).
+    if args.approved_jobs:
+        register_shutdown_handlers()
+        start_keyboard_listener()
+        if not os.environ.get("DASHBOARD_RUN_ID"):
+            update_control_state(stop_requested=False, pause_requested=False)
+        asyncio.run(run_queue_mode(args))
+        return
+
     # Start keyboard listener for pause/resume functionality
     # Local runtime patch: register graceful shutdown handlers once at startup.
     register_shutdown_handlers()
