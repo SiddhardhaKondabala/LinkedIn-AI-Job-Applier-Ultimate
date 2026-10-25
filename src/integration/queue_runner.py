@@ -52,6 +52,7 @@ async def process_queue(
     on_result: Optional[Callable[[ApplicationResult], None]] = None,
     now: Callable[[], str] = utc_now_iso,
     resume_exists: Callable[[str], bool] = lambda p: Path(p).exists(),
+    reraise: tuple = (),
 ) -> list[ApplicationResult]:
     """Run the queue and return one ApplicationResult per job considered.
 
@@ -118,6 +119,11 @@ async def process_queue(
         started = now()
         try:
             res = await apply_fn(job, config)
+        except reraise:
+            # Control-flow signals (e.g. a user/dashboard stop) must halt the run,
+            # not be recorded as a failed application. asyncio.CancelledError is a
+            # BaseException and already propagates past the handler below.
+            raise
         except Exception as e:  # a crashing executor must still yield a durable result
             res = _result(
                 job, config, "failed", started, now(),
