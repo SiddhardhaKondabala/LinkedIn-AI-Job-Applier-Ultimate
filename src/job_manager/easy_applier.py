@@ -7,6 +7,7 @@ from typing import Any, List, Tuple
 from httpx import HTTPStatusError
 
 from config.logger_config import logger
+from src.integration.policy import classify_question
 from src.pydantic_models.job_models import Job, Question
 from src.utils.browser_utils import debug_capture
 from src.utils.utils import ConfigError, async_pause, load_yaml_file, sanitize_text, save_yaml_file
@@ -14,6 +15,30 @@ from src.utils.utils import ConfigError, async_pause, load_yaml_file, sanitize_t
 
 class NoInfoException(Exception):
     pass
+
+
+class ManualReviewRequired(Exception):
+    """A sensitive question the bot must not auto-answer (Phase 7 policy gate).
+
+    ``reason`` is the policy category (e.g. ``work_authorization``) and flows
+    through to the application-result as a ``manual_review`` outcome.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(f"manual review required: {reason}")
+        self.reason = reason
+
+
+class ChallengeDetected(Exception):
+    """LinkedIn interrupted the flow with a captcha/MFA/checkpoint (Phase 7).
+
+    ``kind`` is one of ``captcha`` / ``requires_mfa`` / ``security_checkpoint``.
+    """
+
+    def __init__(self, kind: str, detail: str = ""):
+        super().__init__(detail or kind)
+        self.kind = kind
+        self.detail = detail or kind
 
 
 class BaseEasyApplier(ABC):
@@ -28,6 +53,14 @@ class BaseEasyApplier(ABC):
         # or anonymizing a new one. None means the normal generate/ready-made path.
         self.pinned_resume_path = None
         self.pinned_cover_letter_path = None
+        # Phase 7: when True (queue mode), stop and hand back for manual review
+        # on sensitive questions and page challenges rather than auto-answering.
+        # Off by default so standalone search runs behave exactly as before.
+        self.manual_review_gate = False
+
+    def set_manual_review_gate(self, enabled: bool) -> None:
+        """Enable the Phase 7 manual-review / challenge gate (queue mode)."""
+        self.manual_review_gate = bool(enabled)
 
     def set_pinned_artifacts(self, resume_path=None, cover_letter_path=None) -> None:
         """Pin the exact resume/cover letter to upload (career-ops queue mode)."""
@@ -156,6 +189,7 @@ class BaseEasyApplier(ABC):
     async def _process_form_section(self, section: Any) -> None:
         """Process form section by dispatching to appropriate handler (async)"""
         logger.debug("Processing form section")
+        await self._enforce_manual_review_policy(section)
         if await self._handle_terms_of_service(section):
             logger.debug("Handled terms of service")
             return
@@ -175,6 +209,26 @@ class BaseEasyApplier(ABC):
             logger.debug("Handled textbox question")
             return
         logger.debug("Form section not handled")
+
+    async def _enforce_manual_review_policy(self, section: Any) -> None:
+        """Stop on a sensitive question when the manual-review gate is on.
+
+        No-op unless the gate is enabled (queue mode). Reads the section's
+        visible text and raises ManualReviewRequired for a question the bot must
+        not auto-answer (work authorization, sponsorship, clearance, legal,
+        demographic, salary). A probe failure never blocks applying.
+        """
+        if not getattr(self, "manual_review_gate", False):
+            return
+        try:
+            text = await section.text_content()
+        except Exception as e:
+            logger.debug(f"Manual-review policy probe skipped (no section text): {e}")
+            return
+        reason = classify_question(text)
+        if reason:
+            logger.info(f"Manual-review gate: stopping for sensitive question ({reason})")
+            raise ManualReviewRequired(reason)
 
     def _save_questions(self, question_data: Question) -> None:
         """Save questions to YAML file"""

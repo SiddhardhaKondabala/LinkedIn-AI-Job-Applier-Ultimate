@@ -428,6 +428,7 @@ class LinkedInJobManager(BaseJobManager):
         *,
         resume_path: Optional[str] = None,
         cover_letter_path: Optional[str] = None,
+        manual_review_gate: bool = False,
     ) -> Tuple[str, str]:
         """Apply to the vacancy using LinkedIn Easy Apply functionality (async).
 
@@ -438,6 +439,10 @@ class LinkedInJobManager(BaseJobManager):
         resume_path/cover_letter_path pin the exact career-ops artifacts to
         upload (queue mode, Phase 6); when None the normal generate/ready-made
         resume path is used.
+
+        manual_review_gate turns on the Phase 7 policy/challenge gate (queue
+        mode): stop for manual review on sensitive questions and on a
+        captcha/MFA/checkpoint, instead of auto-answering or fighting it.
         """
         easy_applier_component = LinkedInEasyApplier(
             self.page,
@@ -454,6 +459,8 @@ class LinkedInJobManager(BaseJobManager):
             easy_applier_component.set_pinned_artifacts(
                 resume_path=resume_path, cover_letter_path=cover_letter_path
             )
+        if manual_review_gate:
+            easy_applier_component.set_manual_review_gate(True)
         easy_applier_component.set_page(self.page)
         apply_result, self.submitted_resume_path = await easy_applier_component.apply_to_job(job)
         applied_at = getattr(easy_applier_component, "already_applied_at", None)
@@ -525,6 +532,7 @@ class LinkedInJobManager(BaseJobManager):
                     test_mode=not should_submit,
                     resume_path=approved_job.resume_path,
                     cover_letter_path=approved_job.cover_letter_path,
+                    manual_review_gate=True,  # Phase 7: policy + challenge gate
                 )
 
             return {

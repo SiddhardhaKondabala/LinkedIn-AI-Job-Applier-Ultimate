@@ -52,3 +52,33 @@ def test_manual_review_for_legal():
 
 def test_unknown_status_is_failed():
     assert classify_outcome("weird", "").result == "failed"
+
+
+# --- Phase 7: explicit page-detected statuses take precedence ---
+
+
+def test_manual_review_status_maps_to_manual_review():
+    c = classify_outcome("ManualReview", "work_authorization")
+    assert c.result == "manual_review"
+    assert c.error_code == "work_authorization"
+    assert c.manual_action_required is True
+
+
+def test_challenge_captcha_status():
+    c = classify_outcome("Challenge", "captcha")
+    assert c.result == "captcha"
+    assert c.error_code == "captcha"
+    assert c.manual_action_required is True
+
+
+def test_challenge_mfa_status():
+    c = classify_outcome("Challenge", "requires_mfa")
+    assert c.result == "requires_mfa"
+    assert c.manual_action_required is True
+
+
+def test_challenge_security_checkpoint_maps_to_requires_mfa():
+    c = classify_outcome("Challenge", "security_checkpoint")
+    assert c.result == "requires_mfa"
+    assert c.error_code == "security_checkpoint"
+    assert c.manual_action_required is True
