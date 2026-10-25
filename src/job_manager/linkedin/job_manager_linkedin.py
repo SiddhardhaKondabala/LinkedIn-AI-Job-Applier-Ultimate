@@ -421,8 +421,13 @@ class LinkedInJobManager(BaseJobManager):
                 else:
                     raise
 
-    async def easy_apply(self, job: Job) -> Tuple[str, str]:
-        """Apply to the vacancy using LinkedIn Easy Apply functionality (async)"""
+    async def easy_apply(self, job: Job, test_mode: bool = TEST_MODE) -> Tuple[str, str]:
+        """Apply to the vacancy using LinkedIn Easy Apply functionality (async).
+
+        test_mode fills the application but never clicks the final submit. It
+        defaults to the global TEST_MODE for the search flow; queue mode passes
+        ``not should_submit`` so a queue run honors --submit/--test-mode.
+        """
         easy_applier_component = LinkedInEasyApplier(
             self.page,
             self.llm_answerer_component,
@@ -432,7 +437,7 @@ class LinkedInJobManager(BaseJobManager):
             Path(OUTPUT_DIR_LINKEDIN) / "answers.yaml",
             RESUME_DIR,
             COVER_LETTER_DIR,
-            TEST_MODE,
+            test_mode,
         )
         easy_applier_component.set_page(self.page)
         apply_result, self.submitted_resume_path = await easy_applier_component.apply_to_job(job)
@@ -441,6 +446,69 @@ class LinkedInJobManager(BaseJobManager):
         self.already_applied_at = applied_at if isinstance(applied_at, str) else None
         self.already_applied_at_text = applied_at_text if isinstance(applied_at_text, str) else None
         return apply_result
+
+    async def apply_approved_job(
+        self, approved_job: Any, *, should_submit: bool, allow_external: bool = False
+    ) -> Dict[str, Any]:
+        """Apply to one career-ops-approved job (queue mode).
+
+        Unlike apply_job, this does NO search and SKIPS the LLM "is this
+        interesting?" gate — career-ops already approved the job. It navigates to
+        the approved URL, applies via Easy Apply (or the external agent only when
+        explicitly allowed and submitting), and returns a raw outcome dict that
+        the integration adapter maps to an ApplicationResult. The final submit
+        happens only when should_submit is True; otherwise the flow fills but
+        never submits.
+        """
+        original_page = self.page
+        new_page = await self.page.context.new_page()
+        self.page = new_page
+        self.submitted_resume_path = None
+        self.already_applied_at = None
+        self.already_applied_at_text = None
+        try:
+            await new_page.goto(approved_job.canonical_url, wait_until="domcontentloaded")
+            logger.info(f"[queue] Navigated to approved job: {approved_job.canonical_url}")
+            await async_pause(2, 3)
+
+            job = await self._get_detailed_job_description()
+            if not job.is_valid_for_application():
+                return {
+                    "status": "Skip",
+                    "reason": "Job posting is not valid for application (expired or unreadable)",
+                    "already_applied": False,
+                }
+
+            self.llm_answerer_component.set_job(job.model_dump())
+
+            apply_url = None
+            if EASY_APPLY_ONLY_MODE is False:
+                apply_url = await self._check_apply_button()
+
+            if apply_url and not any(host in apply_url for host in EXTERNAL_APPLY_SKIP_ATSES):
+                if not (should_submit and allow_external):
+                    return {
+                        "status": "Skip",
+                        "reason": "External apply requires manual review",
+                        "already_applied": False,
+                    }
+                status, reason = await self.llm_agent_component.apply_to_job(apply_url)
+            else:
+                status, reason = await self.easy_apply(job, test_mode=not should_submit)
+
+            return {
+                "status": status,
+                "reason": reason,
+                "already_applied": bool(self.already_applied_at),
+                "submitted_resume_path": self.submitted_resume_path,
+            }
+        finally:
+            try:
+                await new_page.close()
+            except Exception as e:
+                if not self._is_target_closed_error(e):
+                    logger.warning(f"[queue] Failed to close job page: {e}")
+            self.page = original_page
 
     async def _scroll_to_load_jobs(self):
         """Scroll the job results container to load all job listings (async)"""
