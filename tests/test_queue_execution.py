@@ -213,3 +213,71 @@ async def test_is_valid_linkedin_url():
     assert not is_valid_linkedin_url("https://boards.greenhouse.io/x/jobs/1")
     assert not is_valid_linkedin_url("https://linkedin.com.evil.example/jobs/view/1")
     assert not is_valid_linkedin_url(None)
+
+
+# --- Phase 8: claiming prevents double-apply ---
+
+
+async def test_claimed_job_is_skipped_not_applied():
+    apply_fn, calls = recorder()
+    results = await process_queue(
+        [make_job()], apply_fn, cfg(), resume_exists=ALWAYS, claim=lambda _j, _r: False
+    )
+    assert results[0].result == "skipped"
+    assert results[0].error_code == "already_claimed"
+    assert calls == []  # never applied
+
+
+async def test_claim_acquired_lets_the_job_apply():
+    apply_fn, calls = recorder()
+    results = await process_queue(
+        [make_job()], apply_fn, cfg(), resume_exists=ALWAYS, claim=lambda _j, _r: True
+    )
+    assert results[0].result == "submitted"
+    assert len(calls) == 1
+
+
+async def test_claim_released_on_transient_failure_kept_on_success():
+    released = []
+    # First job fails (transient) -> released; second submits -> kept.
+    async def apply_fn(job, config):
+        res = "failed" if job.canonical_url.endswith("111") else "submitted"
+        return ApplicationResult.for_job(
+            job, executor_run_id=config.executor_run_id, result=res, started_at=NOW, finished_at=NOW
+        )
+
+    jobs = [
+        make_job(canonical_url="https://www.linkedin.com/jobs/view/111"),
+        make_job(canonical_url="https://www.linkedin.com/jobs/view/222"),
+    ]
+    await process_queue(
+        jobs,
+        apply_fn,
+        cfg(),
+        resume_exists=ALWAYS,
+        claim=lambda _j, _r: True,
+        release_claim=lambda j: released.append(j.canonical_url),
+    )
+    assert released == ["https://www.linkedin.com/jobs/view/111"]  # only the failed one
+
+
+async def test_claim_released_when_a_stop_halts_the_run():
+    released = []
+
+    class Stop(Exception):
+        pass
+
+    async def boom(job, config):
+        raise Stop("dashboard stop")
+
+    with pytest.raises(Stop):
+        await process_queue(
+            [make_job()],
+            boom,
+            cfg(),
+            resume_exists=ALWAYS,
+            claim=lambda _j, _r: True,
+            release_claim=lambda j: released.append(j.integration_id),
+            reraise=(Stop,),
+        )
+    assert released == ["linkedin:4012345678"]  # left open for a resume

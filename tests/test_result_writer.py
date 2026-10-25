@@ -169,3 +169,39 @@ async def test_interruption_leaves_durable_records_for_finished_jobs(tmp_path):
     # The first job's result was persisted before the interruption.
     assert len(_lines(out)) == 1
     assert json.loads(_lines(out)[0])["integration_id"] == "linkedin:1"
+
+
+# --- Phase 8: locking / cross-process durability ---
+
+
+def test_second_writer_instance_sees_prior_key_and_refuses_dup(tmp_path):
+    # Simulates a resumed run (new ResultWriter over an existing file) with the
+    # SAME (run, job) key: it must refresh its seen-set under the lock and refuse.
+    out = tmp_path / "results.jsonl"
+    assert ResultWriter(str(out)).append(make_result()) is True
+    # A fresh writer instance (as a second process would have) must not dup it.
+    assert ResultWriter(str(out)).append(make_result()) is False
+    assert len(_lines(out)) == 1
+
+
+def test_concurrent_writers_sharing_run_id_write_each_key_once(tmp_path):
+    # Two writer instances interleaved over the same file, same run id: each
+    # distinct (run, job) lands exactly once, no interleaving/dup.
+    out = tmp_path / "results.jsonl"
+    w1 = ResultWriter(str(out))
+    w2 = ResultWriter(str(out))
+    assert w1.append(make_result(integration_id="linkedin:1")) is True
+    assert w2.append(make_result(integration_id="linkedin:2")) is True
+    assert w2.append(make_result(integration_id="linkedin:1")) is False  # already by w1
+    assert w1.append(make_result(integration_id="linkedin:2")) is False  # already by w2
+    keys = {(json.loads(l)["executor_run_id"], json.loads(l)["integration_id"]) for l in _lines(out)}
+    assert keys == {("run-1", "linkedin:1"), ("run-1", "linkedin:2")}
+
+
+def test_tolerates_a_torn_trailing_line(tmp_path):
+    out = tmp_path / "results.jsonl"
+    ResultWriter(str(out)).append(make_result(integration_id="linkedin:1"))
+    with open(out, "a", encoding="utf-8") as f:
+        f.write('{"partial": ')  # crash mid-write leaves a torn line
+    # A new writer ignores the torn line and still appends a new record.
+    assert ResultWriter(str(out)).append(make_result(integration_id="linkedin:2")) is True

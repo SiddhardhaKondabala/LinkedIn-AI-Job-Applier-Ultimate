@@ -72,6 +72,7 @@ from src.integration.queue_runner import process_queue
 from src.integration.artifacts import preflight_artifacts, resolve_job_artifacts
 from src.integration.executor_adapter import make_apply_fn
 from src.integration.result_writer import ResultWriter
+from src.integration.claims import ClaimStore, claimant_from_store
 
 # Create necessary directories if they don't exist
 os.makedirs(RESUME_DIR, exist_ok=True)
@@ -467,6 +468,15 @@ async def _run_queue(
     # Write each result the moment its job finishes, so an interruption still
     # leaves durable records; the writer is idempotent on (run, job).
     writer = ResultWriter(queue_run["results_path"]) if queue_run.get("results_path") else None
+
+    # Phase 8: claim each job before applying so a concurrent or resumed run
+    # never double-applies. Claims live next to the results file; without a
+    # results path there is nowhere durable to keep them, so claiming is off.
+    claim = release_claim = None
+    if queue_run.get("results_path"):
+        claim_store = ClaimStore(str(Path(queue_run["results_path"]).parent / "claims"))
+        claim, release_claim = claimant_from_store(claim_store)
+
     apply_fn = make_apply_fn(apply_component, allow_external=queue_run["allow_external"])
     results = await process_queue(
         queue_run["jobs"],
@@ -475,6 +485,8 @@ async def _run_queue(
         pause_checker=pause_checker,
         on_result=(writer.append if writer else None),
         verify_artifacts=resolve_job_artifacts,  # Phase 6 per-job integrity gate
+        claim=claim,  # Phase 8 double-apply guard
+        release_claim=release_claim,
         reraise=(StopRequested,),  # a stop must halt the run, not become a failed result
     )
     logger.info(
