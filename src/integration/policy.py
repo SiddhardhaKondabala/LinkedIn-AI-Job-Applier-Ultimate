@@ -100,6 +100,11 @@ _SENSITIVE_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+#: The sensitive-question categories, in priority order. Public so the
+#: sensitive-answers config can validate its keys against them.
+SENSITIVE_CATEGORIES: tuple[str, ...] = tuple(c for c, _ in _SENSITIVE_CATEGORIES)
+
+
 def classify_question(text: Optional[str]) -> Optional[str]:
     """Return the sensitive-question category for ``text``, or None.
 

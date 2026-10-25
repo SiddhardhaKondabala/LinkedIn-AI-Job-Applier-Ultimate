@@ -429,6 +429,7 @@ class LinkedInJobManager(BaseJobManager):
         resume_path: Optional[str] = None,
         cover_letter_path: Optional[str] = None,
         manual_review_gate: bool = False,
+        sensitive_answers: Optional[dict] = None,
     ) -> Tuple[str, str]:
         """Apply to the vacancy using LinkedIn Easy Apply functionality (async).
 
@@ -443,6 +444,10 @@ class LinkedInJobManager(BaseJobManager):
         manual_review_gate turns on the Phase 7 policy/challenge gate (queue
         mode): stop for manual review on sensitive questions and on a
         captcha/MFA/checkpoint, instead of auto-answering or fighting it.
+
+        sensitive_answers is the candidate's standing answers to sensitive
+        questions (category -> value); a configured category is auto-answered,
+        so the gate only stops for the sensitive questions left unanswered.
         """
         easy_applier_component = LinkedInEasyApplier(
             self.page,
@@ -461,6 +466,8 @@ class LinkedInJobManager(BaseJobManager):
             )
         if manual_review_gate:
             easy_applier_component.set_manual_review_gate(True)
+        if sensitive_answers:
+            easy_applier_component.set_sensitive_answers(sensitive_answers)
         easy_applier_component.set_page(self.page)
         apply_result, self.submitted_resume_path = await easy_applier_component.apply_to_job(job)
         applied_at = getattr(easy_applier_component, "already_applied_at", None)
@@ -468,6 +475,16 @@ class LinkedInJobManager(BaseJobManager):
         self.already_applied_at = applied_at if isinstance(applied_at, str) else None
         self.already_applied_at_text = applied_at_text if isinstance(applied_at_text, str) else None
         return apply_result
+
+    def _queue_sensitive_answers(self) -> dict:
+        """Load the candidate's standing sensitive answers once, then cache them."""
+        cached = getattr(self, "_sensitive_answers_cache", None)
+        if cached is None:
+            from src.integration.sensitive_answers import load_sensitive_answers
+
+            cached = load_sensitive_answers()
+            self._sensitive_answers_cache = cached
+        return cached
 
     async def apply_approved_job(
         self, approved_job: Any, *, should_submit: bool, allow_external: bool = False
@@ -533,6 +550,7 @@ class LinkedInJobManager(BaseJobManager):
                     resume_path=approved_job.resume_path,
                     cover_letter_path=approved_job.cover_letter_path,
                     manual_review_gate=True,  # Phase 7: policy + challenge gate
+                    sensitive_answers=self._queue_sensitive_answers(),
                 )
 
             return {

@@ -1,0 +1,20 @@
+# Standing answers to sensitive application questions (Phase 7).
+#
+# Copy this file to config/sensitive_answers.yaml and fill in YOUR OWN answers.
+# In queue mode the bot auto-answers these categories from here, so it only
+# stops for manual review on a sensitive question you have NOT pre-answered.
+# These are facts about you that barely change job to job, so configure once.
+#
+# Each key is a category; the value is your answer. Omit a category to keep the
+# bot stopping for it. Override the path with CAREER_OPS_SENSITIVE_ANSWERS.
+#
+# For a Yes/No question, give the option label as shown ("Yes" / "No"). For a
+# salary field, give a number. For demographic/EEO, a common choice is to
+# decline to self-identify — set whatever option the forms offer that you want.
+
+# work_authorization: "Yes"          # Are you legally authorized to work here?
+# sponsorship: "No"                  # Do you now/in future require sponsorship?
+# security_clearance: "None"         # Clearance level, if asked
+# legal_history: "No"                # Background-check / conviction questions
+# demographic: "Decline to self-identify"   # Gender / ethnicity / veteran / disability
+# salary_expectation: "150000"       # Expected salary / compensation

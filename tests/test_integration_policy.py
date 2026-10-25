@@ -139,3 +139,57 @@ async def test_challenge_probe_noop_when_gate_disabled():
     a = _applier(gate=False)
     with patch(f"{MOD}.find_element_safely", new=AsyncMock(return_value=object())):
         await a._raise_if_challenged()  # no raise even if elements present
+
+
+# --- Phase 7: configured sensitive answers auto-answer instead of stopping ---
+
+from src.integration.sensitive_answers import load_sensitive_answers  # noqa: E402
+
+
+def test_load_sensitive_answers_keeps_known_drops_unknown_and_blank(tmp_path):
+    f = tmp_path / "sensitive.yaml"
+    f.write_text(
+        "work_authorization: Yes\n"
+        "sponsorship: ''\n"           # blank -> dropped
+        "made_up_category: foo\n"     # unknown -> dropped
+        "salary_expectation: 150000\n",
+        encoding="utf-8",
+    )
+    answers = load_sensitive_answers(str(f))
+    assert answers == {"work_authorization": "Yes", "salary_expectation": "150000"}
+
+
+def test_load_sensitive_answers_missing_file_is_empty(tmp_path):
+    assert load_sensitive_answers(str(tmp_path / "nope.yaml")) == {}
+
+
+@pytest.mark.asyncio
+async def test_configured_sensitive_question_is_auto_answered_not_stopped():
+    a = _applier(gate=True)
+    a.set_sensitive_answers({"sponsorship": "No"})
+    section = MagicMock()
+    section.text_content = AsyncMock(return_value="Do you require visa sponsorship?")
+    # No raise: the configured category proceeds.
+    await a._enforce_manual_review_policy(section)
+    # And the field handlers get the configured value via the cache lookup.
+    cached = a._find_cached_question("Do you require visa sponsorship?", "radio")
+    assert cached is not None
+    assert cached.answer == "No"
+    assert cached.question_type == "radio"
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_sensitive_question_still_stops():
+    a = _applier(gate=True)
+    a.set_sensitive_answers({"salary_expectation": "150000"})  # different category
+    section = MagicMock()
+    section.text_content = AsyncMock(return_value="Do you require visa sponsorship?")
+    with pytest.raises(ManualReviewRequired):
+        await a._enforce_manual_review_policy(section)
+
+
+def test_configured_answer_ignored_when_gate_disabled():
+    a = _applier(gate=False)
+    a.set_sensitive_answers({"salary_expectation": "150000"})
+    # Gate off -> no sensitive injection, ordinary cache lookup (miss) returns None.
+    assert a._find_cached_question("What is your expected salary?", "textbox") is None

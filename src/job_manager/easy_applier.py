@@ -57,10 +57,18 @@ class BaseEasyApplier(ABC):
         # on sensitive questions and page challenges rather than auto-answering.
         # Off by default so standalone search runs behave exactly as before.
         self.manual_review_gate = False
+        # Phase 7: candidate's standing answers to sensitive questions, keyed by
+        # policy category. A configured category is auto-answered; the gate only
+        # stops for a sensitive question the candidate has NOT pre-answered.
+        self.sensitive_answers: dict = {}
 
     def set_manual_review_gate(self, enabled: bool) -> None:
         """Enable the Phase 7 manual-review / challenge gate (queue mode)."""
         self.manual_review_gate = bool(enabled)
+
+    def set_sensitive_answers(self, answers: dict) -> None:
+        """Provide the candidate's standing answers to sensitive questions."""
+        self.sensitive_answers = dict(answers or {})
 
     def set_pinned_artifacts(self, resume_path=None, cover_letter_path=None) -> None:
         """Pin the exact resume/cover letter to upload (career-ops queue mode)."""
@@ -226,9 +234,15 @@ class BaseEasyApplier(ABC):
             logger.debug(f"Manual-review policy probe skipped (no section text): {e}")
             return
         reason = classify_question(text)
-        if reason:
-            logger.info(f"Manual-review gate: stopping for sensitive question ({reason})")
-            raise ManualReviewRequired(reason)
+        if not reason:
+            return
+        if reason in self.sensitive_answers:
+            # The candidate pre-answered this category; let the field handlers
+            # fill it from the configured value (see _find_cached_question).
+            logger.info(f"Manual-review gate: auto-answering sensitive question ({reason})")
+            return
+        logger.info(f"Manual-review gate: stopping for sensitive question ({reason})")
+        raise ManualReviewRequired(reason)
 
     def _save_questions(self, question_data: Question) -> None:
         """Save questions to YAML file"""
@@ -276,11 +290,26 @@ class BaseEasyApplier(ABC):
     def _find_cached_question(
         self, question_text: str, question_type: str | None = None
     ) -> Question | None:
-        """Find a cached answer by exact question text, preferring the same field type."""
+        """Find a cached answer by exact question text, preferring the same field type.
+
+        When the manual-review gate is on, a configured standing answer for a
+        sensitive category (Phase 7) wins over the per-job cache, so work-auth /
+        sponsorship / salary etc. answer consistently across every job.
+        """
         current_question_sanitized = sanitize_text(question_text or "")
         if not current_question_sanitized:
             logger.debug("Question has no text, skipping the answer cache lookup")
             return None
+
+        if getattr(self, "manual_review_gate", False) and self.sensitive_answers:
+            category = classify_question(question_text)
+            if category and category in self.sensitive_answers:
+                logger.debug(f"Using configured sensitive answer for '{category}'")
+                return Question(
+                    question=current_question_sanitized,
+                    question_type=question_type or "textbox",
+                    answer=self.sensitive_answers[category],
+                )
         same_type_match = None
         any_type_match = None
 
