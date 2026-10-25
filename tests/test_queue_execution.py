@@ -137,6 +137,18 @@ async def test_max_jobs_limits_attempts():
     assert len(results) == 1
 
 
+async def test_reraise_exception_halts_the_run():
+    class Stop(Exception):
+        pass
+
+    async def boom(job, config):
+        raise Stop("stop requested")
+
+    # A control-flow signal in `reraise` propagates instead of becoming a result.
+    with pytest.raises(Stop):
+        await process_queue([make_job()], boom, cfg(), resume_exists=ALWAYS, reraise=(Stop,))
+
+
 async def test_crashing_executor_still_yields_a_failed_result():
     async def boom(job, config):
         raise RuntimeError("browser exploded")

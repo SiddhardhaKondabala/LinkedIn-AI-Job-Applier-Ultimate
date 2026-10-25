@@ -485,7 +485,16 @@ class LinkedInJobManager(BaseJobManager):
             if EASY_APPLY_ONLY_MODE is False:
                 apply_url = await self._check_apply_button()
 
-            if apply_url and not any(host in apply_url for host in EXTERNAL_APPLY_SKIP_ATSES):
+            if apply_url:
+                # An external apply button is present. A skip-listed ATS can't be
+                # automated, so stop for manual review rather than running Easy
+                # Apply against a page that has no Easy Apply button.
+                if any(host in apply_url for host in EXTERNAL_APPLY_SKIP_ATSES):
+                    return {
+                        "status": "Skip",
+                        "reason": f"Unsupported external ATS — manual review: {apply_url}",
+                        "already_applied": False,
+                    }
                 if not (should_submit and allow_external):
                     return {
                         "status": "Skip",

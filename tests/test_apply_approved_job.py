@@ -112,3 +112,19 @@ async def test_external_apply_requires_manual_review_when_not_allowed():
     assert "external apply requires manual review" in out["reason"].lower()
     easy.assert_not_called()
     jm.llm_agent_component.apply_to_job.assert_not_called()
+
+
+async def test_skip_listed_external_ats_is_not_sent_to_easy_apply():
+    jm, _ = make_jm()
+    easy = AsyncMock(return_value=("Success", ""))
+    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch(f"{MOD}.EASY_APPLY_ONLY_MODE", False), patch(
+        f"{MOD}.EXTERNAL_APPLY_SKIP_ATSES", ("skipme.example",)
+    ), patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())), patch.object(
+        jm, "_check_apply_button", new=AsyncMock(return_value="https://skipme.example/apply")
+    ), patch.object(jm, "easy_apply", new=easy):
+        out = await jm.apply_approved_job(approved(), should_submit=True, allow_external=True)
+
+    assert out["status"] == "Skip"
+    assert "unsupported external ats" in out["reason"].lower()
+    easy.assert_not_called()
+    jm.llm_agent_component.apply_to_job.assert_not_called()

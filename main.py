@@ -473,6 +473,7 @@ async def _run_queue(
         queue_run["config"],
         pause_checker=pause_checker,
         on_result=(writer.append if writer else None),
+        reraise=(StopRequested,),  # a stop must halt the run, not become a failed result
     )
     logger.info(
         f"[queue] Processed {len(results)} job(s); results -> {queue_run.get('results_path')}"
