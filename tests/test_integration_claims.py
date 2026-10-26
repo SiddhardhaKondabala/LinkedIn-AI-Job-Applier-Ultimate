@@ -1,5 +1,10 @@
 """Phase 8 — job claiming so the same job is never applied to twice."""
 
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 from src.integration.claims import (
     KEEP_CLAIM_RESULTS,
     ClaimStore,
@@ -47,6 +52,45 @@ def test_release_missing_claim_is_safe(tmp_path):
     ClaimStore(str(tmp_path / "claims")).release("never-claimed")  # no error
 
 
+def test_expired_claim_is_reclaimed(tmp_path):
+    store = ClaimStore(str(tmp_path / "claims"), timeout_seconds=1)
+    assert store.try_claim("linkedin:111", "run-a") is True
+    path = store._path("linkedin:111")
+    os.utime(path, (0, 0))
+    assert store.try_claim("linkedin:111", "run-b") is True
+    assert store.owner("linkedin:111") == "run-b"
+
+
+def test_only_one_concurrent_reclaimer_wins(tmp_path):
+    class SlowExpiredStore(ClaimStore):
+        def _is_expired(self, path):
+            if time.time() - path.stat().st_mtime > 1:
+                time.sleep(0.03)
+            return super()._is_expired(path)
+
+    store = SlowExpiredStore(str(tmp_path / "claims"), timeout_seconds=1)
+    assert store.try_claim("linkedin:111", "old") is True
+    os.utime(store._path("linkedin:111"), (0, 0))
+    barrier = Barrier(8)
+
+    def reclaim(index):
+        barrier.wait()
+        return store.try_claim("linkedin:111", f"run-{index}")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(reclaim, range(8)))
+
+    assert outcomes.count(True) == 1
+
+
+def test_zero_timeout_disables_expiration(tmp_path):
+    store = ClaimStore(str(tmp_path / "claims"), timeout_seconds=0)
+    assert store.try_claim("linkedin:111", "run-a") is True
+    path = store._path("linkedin:111")
+    os.utime(path, (0, 0))
+    assert store.try_claim("linkedin:111", "run-b") is False
+
+
 def test_distinct_jobs_do_not_collide(tmp_path):
     store = ClaimStore(str(tmp_path / "claims"))
     assert store.try_claim("linkedin:1", "r") is True
@@ -55,12 +99,24 @@ def test_distinct_jobs_do_not_collide(tmp_path):
 
 def test_claimant_helpers_bind_to_the_store(tmp_path):
     store = ClaimStore(str(tmp_path / "claims"))
-    claim, release = claimant_from_store(store)
+    claim, release, finalize = claimant_from_store(store)
     job = make_job("linkedin:999")
     assert claim(job, "run-a") is True
     assert claim(job, "run-b") is False
     release(job)
     assert claim(job, "run-b") is True
+    finalize(job, "submitted")
+    assert store.owner(job.integration_id) == "run-b"
+
+
+def test_terminal_claim_never_expires(tmp_path):
+    store = ClaimStore(str(tmp_path / "claims"), timeout_seconds=1)
+    assert store.try_claim("linkedin:111", "run-a") is True
+    store.finalize("linkedin:111", "submitted")
+    path = store._path("linkedin:111")
+    os.utime(path, (0, 0))
+    assert store.try_claim("linkedin:111", "run-b") is False
+    assert store.owner("linkedin:111") == "run-a"
 
 
 def test_keep_claim_results_are_terminal_only():

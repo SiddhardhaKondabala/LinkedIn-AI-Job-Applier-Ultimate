@@ -50,7 +50,11 @@ def recorder(result="submitted"):
     async def apply_fn(job, config):
         calls.append((job, config))
         return ApplicationResult.for_job(
-            job, executor_run_id=config.executor_run_id, result=result, started_at=NOW, finished_at=NOW
+            job,
+            executor_run_id=config.executor_run_id,
+            result=result,
+            started_at=NOW,
+            finished_at=NOW,
         )
 
     return apply_fn, calls
@@ -74,7 +78,9 @@ async def test_sequential_processing_calls_apply_for_each():
 
 async def test_below_min_score_skipped_without_applying():
     apply_fn, calls = recorder()
-    results = await process_queue([make_job(career_ops_score=3.9)], apply_fn, cfg(), resume_exists=ALWAYS)
+    results = await process_queue(
+        [make_job(career_ops_score=3.9)], apply_fn, cfg(), resume_exists=ALWAYS
+    )
     assert results[0].result == "skipped"
     assert results[0].error_code == "below_min_score"
     assert calls == []
@@ -83,7 +89,10 @@ async def test_below_min_score_skipped_without_applying():
 async def test_invalid_linkedin_url_is_invalid():
     apply_fn, calls = recorder()
     results = await process_queue(
-        [make_job(canonical_url="https://boards.greenhouse.io/acme/jobs/1")], apply_fn, cfg(), resume_exists=ALWAYS
+        [make_job(canonical_url="https://boards.greenhouse.io/acme/jobs/1")],
+        apply_fn,
+        cfg(),
+        resume_exists=ALWAYS,
     )
     assert results[0].result == "invalid"
     assert results[0].error_code == "invalid_linkedin_url"
@@ -138,7 +147,9 @@ async def test_dry_run_never_calls_apply():
 
 async def test_test_mode_never_submits():
     apply_fn, calls = recorder()
-    await process_queue([make_job()], apply_fn, cfg(submit=True, test_mode=True), resume_exists=ALWAYS)
+    await process_queue(
+        [make_job()], apply_fn, cfg(submit=True, test_mode=True), resume_exists=ALWAYS
+    )
     # apply_fn received a config whose should_submit is False in test mode.
     assert calls[0][1].should_submit is False
 
@@ -149,7 +160,9 @@ async def test_default_config_does_not_submit_but_submit_flag_does():
     assert cfg(submit=True, dry_run=True).should_submit is False
 
 
-@pytest.mark.parametrize("result", ["submitted", "already_applied", "captcha", "requires_mfa", "failed"])
+@pytest.mark.parametrize(
+    "result", ["submitted", "already_applied", "captcha", "requires_mfa", "failed"]
+)
 async def test_result_mapping_passthrough(result):
     apply_fn, _ = recorder(result=result)
     results = await process_queue([make_job()], apply_fn, cfg(), resume_exists=ALWAYS)
@@ -196,8 +209,13 @@ async def test_pause_checker_is_awaited_per_job():
         seen["n"] += 1
 
     apply_fn, _ = recorder()
-    await process_queue([make_job(), make_job(canonical_url="https://www.linkedin.com/jobs/view/222")],
-                        apply_fn, cfg(), pause_checker=pause, resume_exists=ALWAYS)
+    await process_queue(
+        [make_job(), make_job(canonical_url="https://www.linkedin.com/jobs/view/222")],
+        apply_fn,
+        cfg(),
+        pause_checker=pause,
+        resume_exists=ALWAYS,
+    )
     assert seen["n"] == 2
 
 
@@ -239,6 +257,8 @@ async def test_claim_acquired_lets_the_job_apply():
 
 async def test_claim_released_on_transient_failure_kept_on_success():
     released = []
+    finalized = []
+
     # First job fails (transient) -> released; second submits -> kept.
     async def apply_fn(job, config):
         res = "failed" if job.canonical_url.endswith("111") else "submitted"
@@ -257,8 +277,10 @@ async def test_claim_released_on_transient_failure_kept_on_success():
         resume_exists=ALWAYS,
         claim=lambda _j, _r: True,
         release_claim=lambda j: released.append(j.canonical_url),
+        finalize_claim=lambda j, result: finalized.append((j.canonical_url, result)),
     )
     assert released == ["https://www.linkedin.com/jobs/view/111"]  # only the failed one
+    assert finalized == [("https://www.linkedin.com/jobs/view/222", "submitted")]
 
 
 async def test_claim_released_when_a_stop_halts_the_run():

@@ -60,10 +60,11 @@ def approved():
 async def test_applies_without_search_and_test_mode_when_not_submitting():
     jm, new_page = make_jm()
     easy = AsyncMock(return_value=("Success", ""))
-    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch.object(
-        jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())
-    ), patch.object(jm, "_check_apply_button", new=AsyncMock(return_value=None)), patch.object(
-        jm, "easy_apply", new=easy
+    with (
+        patch(f"{MOD}.async_pause", new=AsyncMock()),
+        patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())),
+        patch.object(jm, "_check_apply_button", new=AsyncMock(return_value=None)),
+        patch.object(jm, "easy_apply", new=easy),
     ):
         out = await jm.apply_approved_job(approved(), should_submit=False)
 
@@ -97,10 +98,11 @@ async def test_easy_apply_receives_the_approved_artifacts():
             "created_at": "2026-10-24T12:00:00Z",
         }
     )
-    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch.object(
-        jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())
-    ), patch.object(jm, "_check_apply_button", new=AsyncMock(return_value=None)), patch.object(
-        jm, "easy_apply", new=easy
+    with (
+        patch(f"{MOD}.async_pause", new=AsyncMock()),
+        patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())),
+        patch.object(jm, "_check_apply_button", new=AsyncMock(return_value=None)),
+        patch.object(jm, "easy_apply", new=easy),
     ):
         await jm.apply_approved_job(job, should_submit=True)
 
@@ -113,10 +115,11 @@ async def test_easy_apply_receives_the_approved_artifacts():
 async def test_submit_true_runs_easy_apply_without_test_mode():
     jm, _ = make_jm()
     easy = AsyncMock(return_value=("Success", ""))
-    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch.object(
-        jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())
-    ), patch.object(jm, "_check_apply_button", new=AsyncMock(return_value=None)), patch.object(
-        jm, "easy_apply", new=easy
+    with (
+        patch(f"{MOD}.async_pause", new=AsyncMock()),
+        patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())),
+        patch.object(jm, "_check_apply_button", new=AsyncMock(return_value=None)),
+        patch.object(jm, "easy_apply", new=easy),
     ):
         await jm.apply_approved_job(approved(), should_submit=True)
     assert easy.await_args.kwargs["test_mode"] is False
@@ -124,8 +127,11 @@ async def test_submit_true_runs_easy_apply_without_test_mode():
 
 async def test_invalid_posting_returns_skip():
     jm, _ = make_jm()
-    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch.object(
-        jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock(valid=False))
+    with (
+        patch(f"{MOD}.async_pause", new=AsyncMock()),
+        patch.object(
+            jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock(valid=False))
+        ),
     ):
         out = await jm.apply_approved_job(approved(), should_submit=True)
     assert out["status"] == "Skip"
@@ -135,11 +141,15 @@ async def test_invalid_posting_returns_skip():
 async def test_external_apply_requires_manual_review_when_not_allowed():
     jm, _ = make_jm()
     easy = AsyncMock(return_value=("Success", ""))
-    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch(f"{MOD}.EASY_APPLY_ONLY_MODE", False), patch.object(
-        jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())
-    ), patch.object(
-        jm, "_check_apply_button", new=AsyncMock(return_value="https://external.example/apply")
-    ), patch.object(jm, "easy_apply", new=easy):
+    with (
+        patch(f"{MOD}.async_pause", new=AsyncMock()),
+        patch(f"{MOD}.EASY_APPLY_ONLY_MODE", False),
+        patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())),
+        patch.object(
+            jm, "_check_apply_button", new=AsyncMock(return_value="https://external.example/apply")
+        ),
+        patch.object(jm, "easy_apply", new=easy),
+    ):
         out = await jm.apply_approved_job(approved(), should_submit=True, allow_external=False)
 
     assert out["status"] == "Skip"
@@ -151,14 +161,40 @@ async def test_external_apply_requires_manual_review_when_not_allowed():
 async def test_skip_listed_external_ats_is_not_sent_to_easy_apply():
     jm, _ = make_jm()
     easy = AsyncMock(return_value=("Success", ""))
-    with patch(f"{MOD}.async_pause", new=AsyncMock()), patch(f"{MOD}.EASY_APPLY_ONLY_MODE", False), patch(
-        f"{MOD}.EXTERNAL_APPLY_SKIP_ATSES", ("skipme.example",)
-    ), patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())), patch.object(
-        jm, "_check_apply_button", new=AsyncMock(return_value="https://skipme.example/apply")
-    ), patch.object(jm, "easy_apply", new=easy):
+    with (
+        patch(f"{MOD}.async_pause", new=AsyncMock()),
+        patch(f"{MOD}.EASY_APPLY_ONLY_MODE", False),
+        patch(f"{MOD}.EXTERNAL_APPLY_SKIP_ATSES", ("skipme.example",)),
+        patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())),
+        patch.object(
+            jm, "_check_apply_button", new=AsyncMock(return_value="https://skipme.example/apply")
+        ),
+        patch.object(jm, "easy_apply", new=easy),
+    ):
         out = await jm.apply_approved_job(approved(), should_submit=True, allow_external=True)
 
     assert out["status"] == "Skip"
     assert "unsupported external ats" in out["reason"].lower()
     easy.assert_not_called()
     jm.llm_agent_component.apply_to_job.assert_not_called()
+
+
+async def test_allowed_external_apply_receives_approved_artifacts_and_safety_gate():
+    jm, _ = make_jm()
+    job = approved()
+    job.resume_path = "/abs/cv-017.pdf"
+    job.cover_letter_path = "/abs/cover-017.pdf"
+    with (
+        patch(f"{MOD}.async_pause", new=AsyncMock()),
+        patch(f"{MOD}.EASY_APPLY_ONLY_MODE", False),
+        patch.object(jm, "_get_detailed_job_description", new=AsyncMock(return_value=job_mock())),
+        patch.object(
+            jm, "_check_apply_button", new=AsyncMock(return_value="https://external.example/apply")
+        ),
+    ):
+        await jm.apply_approved_job(job, should_submit=True, allow_external=True)
+
+    kwargs = jm.llm_agent_component.apply_to_job.await_args.kwargs
+    assert kwargs["resume_pdf_path"] == "/abs/cv-017.pdf"
+    assert kwargs["cover_letter_path"] == "/abs/cover-017.pdf"
+    assert kwargs["manual_review_gate"] is True

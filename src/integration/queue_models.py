@@ -37,8 +37,8 @@ class ApprovedJob:
     application_status: str
     created_at: str
     requisition_id: Optional[str] = None
-    #: Hex SHA-256 of the exact artifact career-ops approved, or None. The
-    #: executor recomputes and compares before upload (Phase 6).
+    #: Hex SHA-256 of the exact artifact career-ops approved. Kept Optional for
+    #: v1 schema parsing; the artifact gate rejects a missing hash before use.
     resume_sha256: Optional[str] = None
     cover_letter_sha256: Optional[str] = None
 

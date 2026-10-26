@@ -26,6 +26,7 @@ from .queue_models import ApplicationResult, ApprovedJob, utc_now_iso
 ApplyFn = Callable[[ApprovedJob, QueueExecutionConfig], Awaitable[ApplicationResult]]
 ClaimFn = Callable[[ApprovedJob, str], bool]
 ReleaseFn = Callable[[ApprovedJob], None]
+FinalizeFn = Callable[[ApprovedJob, str], None]
 
 _LINKEDIN_JOB_RE = re.compile(
     r"^https?://([a-z0-9-]+\.)*linkedin\.com/(?:jobs/view/|comm/jobs/view/)\d+", re.I
@@ -60,6 +61,7 @@ async def process_queue(
     verify_artifacts: Optional[Callable[[ApprovedJob], object]] = None,
     claim: Optional[ClaimFn] = None,
     release_claim: Optional[ReleaseFn] = None,
+    finalize_claim: Optional[FinalizeFn] = None,
     reraise: tuple = (),
 ) -> list[ApplicationResult]:
     """Run the queue and return one ApplicationResult per job considered.
@@ -85,7 +87,11 @@ async def process_queue(
         if job.career_ops_score < config.min_score:
             record(
                 _result(
-                    job, config, "skipped", now(), now(),
+                    job,
+                    config,
+                    "skipped",
+                    now(),
+                    now(),
                     error_code="below_min_score",
                     error_message=f"score {job.career_ops_score} < min {config.min_score}",
                 )
@@ -95,7 +101,11 @@ async def process_queue(
         if not is_valid_linkedin_url(job.canonical_url):
             record(
                 _result(
-                    job, config, "invalid", now(), now(),
+                    job,
+                    config,
+                    "invalid",
+                    now(),
+                    now(),
                     error_code="invalid_linkedin_url",
                     error_message=job.canonical_url,
                     manual_action_required=True,
@@ -106,7 +116,11 @@ async def process_queue(
         if not resume_exists(job.resume_path):
             record(
                 _result(
-                    job, config, "invalid", now(), now(),
+                    job,
+                    config,
+                    "invalid",
+                    now(),
+                    now(),
                     error_code="missing_resume",
                     error_message=job.resume_path,
                     manual_action_required=True,
@@ -124,7 +138,11 @@ async def process_queue(
             except ArtifactError as e:
                 record(
                     _result(
-                        job, config, e.result, now(), now(),
+                        job,
+                        config,
+                        e.result,
+                        now(),
+                        now(),
                         error_code=e.error_code,
                         error_message=str(e),
                         manual_action_required=e.manual_action_required,
@@ -135,7 +153,11 @@ async def process_queue(
         if config.dry_run:
             record(
                 _result(
-                    job, config, "skipped", now(), now(),
+                    job,
+                    config,
+                    "skipped",
+                    now(),
+                    now(),
                     error_code="dry_run",
                     error_message="dry-run: queue validated, not executed",
                 )
@@ -148,7 +170,11 @@ async def process_queue(
         if claim is not None and not claim(job, config.executor_run_id):
             record(
                 _result(
-                    job, config, "skipped", now(), now(),
+                    job,
+                    config,
+                    "skipped",
+                    now(),
+                    now(),
                     error_code="already_claimed",
                     error_message=f"already claimed for {job.integration_id}",
                 )
@@ -168,15 +194,27 @@ async def process_queue(
             raise
         except Exception as e:  # a crashing executor must still yield a durable result
             res = _result(
-                job, config, "failed", started, now(),
+                job,
+                config,
+                "failed",
+                started,
+                now(),
                 error_code="executor_exception",
                 error_message=str(e),
             )
+        # Make a terminal claim durable BEFORE publishing the result. If the
+        # process dies between these two writes, preventing a double submission
+        # is more important than dashboard completeness; the inverse order left
+        # a small window where a submitted result existed but its active claim
+        # could later expire and reopen the job.
+        if res.result in KEEP_CLAIM_RESULTS:
+            if finalize_claim is not None:
+                finalize_claim(job, res.result)
         record(res)
         attempted += 1
-        # Keep the claim for a real attempt or a human-needed stop; release it
-        # for a transient outcome (e.g. failed) so a later run can retry.
-        if release_claim is not None and res.result not in KEEP_CLAIM_RESULTS:
+        # Transient outcomes are retryable only after their durable result has
+        # been published; terminal/human-stop claims remain forever.
+        if res.result not in KEEP_CLAIM_RESULTS and release_claim is not None:
             release_claim(job)
 
     return results

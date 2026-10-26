@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -111,13 +112,32 @@ class ApplyAgent:
         """Add resume for analysis."""
         self.resume_readable = resume_readable
 
-    def _build_task(self, job_url: str, resume_pdf_path: str) -> str:
+    def _build_task(
+        self,
+        job_url: str,
+        resume_pdf_path: str,
+        cover_letter_path: str | None = None,
+        *,
+        manual_review_gate: bool = False,
+    ) -> str:
         """Build the browser-agent task prompt for applying to one job.
 
         SECURITY: this never constructs an account password (the old version
         derived one from the email local-part, which is a credential-handling
         risk). Account registration is a hard stop for manual user action.
         """
+        cover_instruction = (
+            f"- An approved cover letter is available as: {cover_letter_path}"
+            if cover_letter_path
+            else "- No cover letter was approved; stop for manual review if one is required."
+        )
+        safety_instruction = (
+            "- STOP for manual review on account registration, CAPTCHA, MFA/email verification, "
+            "legal/demographic/work-authorization/sponsorship/salary questions, or any unknown "
+            "required field. Do not answer or bypass them."
+            if manual_review_gate
+            else "- If email verification appears, use the provided wait tool and continue only after the user verifies it."
+        )
         return f"""
         - Your goal is to apply to the job at: {job_url}
         - Use the information from my resume (source of truth) and any additional information already present on the page.
@@ -133,10 +153,11 @@ class ApplyAgent:
             - You may upload my resume PDF when the application asks for it.
             - The resume file is available as: {resume_pdf_path}
             - Prefer using the built-in upload_file_to_element action; if the page flow needs it, you can use the upload_resume tool to produce an UploadFileAction.
+            {cover_instruction}
 
         - If you are asked to register or create an account, DO NOT create one and DO NOT enter or invent any password. Stop and report in your final_result that account registration is required so the user can complete it manually.
 
-        - If an email verification or confirmation step appears, call the wait_for_email_verification tool immediately — do NOT give up or mark the task as failed. After the tool returns, continue the application.
+        {safety_instruction}
 
         - Before you start, create a step-by-step plan to complete the entire application. Delegate a step for each field/section you encounter.
 
@@ -146,14 +167,25 @@ class ApplyAgent:
                 1) a human-readable summary of all detections and actions performed
                 2) a list of all questions encountered on the page (including any screening questions)
                 3) a short final human-readable summary at the very end
+                4) the FINAL line must be exactly one of:
+                   OUTCOME: submitted       (only after a visible submission confirmation)
+                   OUTCOME: manual_review   (a person must answer/verify/continue)
+                   OUTCOME: failed          (the application was not submitted)
 
         ## My resume text (source of truth):
         {self.resume_readable}
         """
 
-    async def apply(self, job_url: str) -> None:
+    async def apply(
+        self,
+        job_url: str,
+        *,
+        resume_pdf_path: str | None = None,
+        cover_letter_path: str | None = None,
+        manual_review_gate: bool = False,
+    ) -> str:
         """Apply to the job using AI Agent"""
-        resume_pdf_path = str(get_ready_made_resume())
+        resume_pdf_path = str(resume_pdf_path or get_ready_made_resume())
         emit_event("agent_apply_started", "External apply agent started", url=job_url)
 
         tools = Tools()
@@ -166,28 +198,37 @@ class ApplyAgent:
 
         browser_storage_state = self.browser_storage_state
 
-        @tools.action(
-            description=(
-                "Call this when the website requires email verification or confirmation "
-                "before you can proceed. This pauses the task and asks the user to verify "
-                "their email, then saves the browser session so the user won't need to "
-                "log in again."
-            )
-        )
-        async def wait_for_email_verification(browser_session):
-            print("\n" + "=" * 60)
-            print("EMAIL VERIFICATION REQUIRED")
-            print("Please check your email and confirm your account.")
-            print("Once done, press Enter to continue...")
-            print("=" * 60 + "\n")
-            await asyncio.get_event_loop().run_in_executor(None, input)
-            await browser_session.export_storage_state(output_path=browser_storage_state)
-            logger.info(f"Browser session saved to {browser_storage_state}")
-            return "User confirmed email verification. Browser session saved. Proceeding with the application."
+        if not manual_review_gate:
 
-        task = self._build_task(job_url, resume_pdf_path)
+            @tools.action(
+                description=(
+                    "Call this when the website requires email verification or confirmation "
+                    "before you can proceed. This pauses the task and asks the user to verify "
+                    "their email, then saves the browser session so the user won't need to "
+                    "log in again."
+                )
+            )
+            async def wait_for_email_verification(browser_session):
+                print("\n" + "=" * 60)
+                print("EMAIL VERIFICATION REQUIRED")
+                print("Please check your email and confirm your account.")
+                print("Once done, press Enter to continue...")
+                print("=" * 60 + "\n")
+                await asyncio.get_event_loop().run_in_executor(None, input)
+                await browser_session.export_storage_state(output_path=browser_storage_state)
+                logger.info(f"Browser session saved to {browser_storage_state}")
+                return "User confirmed email verification. Browser session saved. Proceeding with the application."
+
+        task = self._build_task(
+            job_url,
+            resume_pdf_path,
+            cover_letter_path,
+            manual_review_gate=manual_review_gate,
+        )
 
         available_file_paths = [resume_pdf_path]
+        if cover_letter_path:
+            available_file_paths.append(str(cover_letter_path))
 
         browser = self._create_browser()
         try:
@@ -209,12 +250,18 @@ class ApplyAgent:
         finally:
             await browser.stop()
 
-        self._log_token_usage(task)
+        try:
+            self._log_token_usage(task)
+        except Exception as e:
+            # Telemetry must never turn a completed submission into a retryable
+            # failure: the queue would release its claim and could submit twice.
+            logger.warning(f"Failed to record apply-agent token usage: {e}")
         if not history.is_successful():
             raise RuntimeError(
                 history.final_result() or "Apply agent did not complete the application"
             )
         emit_event("agent_apply_completed", "External apply agent completed", url=job_url)
+        return history.final_result() or ""
 
     def _log_token_usage(self, task: str) -> None:
         """Log AI Agent token usage and calculate the total cost"""
@@ -259,12 +306,37 @@ class ApplyAgent:
 
         return total_cost
 
-    async def apply_to_job(self, job_url: str) -> tuple[str, str]:
+    async def apply_to_job(
+        self,
+        job_url: str,
+        *,
+        resume_pdf_path: str | None = None,
+        cover_letter_path: str | None = None,
+        manual_review_gate: bool = False,
+    ) -> tuple[str, str]:
         """Apply to job, handling event loop properly"""
         # Directly await the apply method since we're already in an async context
         try:
-            await self.apply(job_url)
-            return ("Success", "")
+            final_result = await self.apply(
+                job_url,
+                resume_pdf_path=resume_pdf_path,
+                cover_letter_path=cover_letter_path,
+                manual_review_gate=manual_review_gate,
+            )
+            final_line = (
+                final_result.rstrip().splitlines()[-1].strip() if final_result.strip() else ""
+            )
+            outcome = re.fullmatch(
+                r"OUTCOME:\s*(submitted|manual_review|failed)", final_line, flags=re.IGNORECASE
+            )
+            if outcome and outcome.group(1).lower() == "submitted":
+                return ("Success", "")
+            if outcome and outcome.group(1).lower() == "manual_review":
+                return ("ManualReview", "external_apply_manual_review")
+            # A browser agent completing its task does not prove submission: its
+            # own prompt also allows "confirmed cannot apply" as successful.
+            # Fail closed unless it emitted the explicit confirmation sentinel.
+            return ("Error", "External apply did not confirm submission")
         except Exception as e:
             logger.error(f"Error applying to job: {e}")
             emit_event(

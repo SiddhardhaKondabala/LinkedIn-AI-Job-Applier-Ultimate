@@ -540,7 +540,12 @@ class LinkedInJobManager(BaseJobManager):
                         "reason": "External apply requires manual review",
                         "already_applied": False,
                     }
-                status, reason = await self.llm_agent_component.apply_to_job(apply_url)
+                status, reason = await self.llm_agent_component.apply_to_job(
+                    apply_url,
+                    resume_pdf_path=approved_job.resume_path,
+                    cover_letter_path=approved_job.cover_letter_path,
+                    manual_review_gate=True,
+                )
             else:
                 # Phase 6: upload the exact career-ops resume/cover letter for
                 # this approved job, not a bot-generated one.
