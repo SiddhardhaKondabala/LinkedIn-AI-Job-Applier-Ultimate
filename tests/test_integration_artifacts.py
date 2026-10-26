@@ -73,12 +73,13 @@ def test_resolve_returns_absolute_paths(tmp_path):
     assert resolved.cover_letter_path == str(cover.resolve())
 
 
-def test_resolve_allows_missing_hash(tmp_path):
-    # A queue without hashes (hash-less producer) still resolves on existence.
+def test_resolve_rejects_missing_hash(tmp_path):
     resume = tmp_path / "cv.pdf"
     write_pdf(resume)
-    resolved = resolve_job_artifacts(make_job(resume_path=str(resume)))
-    assert resolved.resume_path == str(resume.resolve())
+    with pytest.raises(ArtifactError) as ei:
+        resolve_job_artifacts(make_job(resume_path=str(resume)))
+    assert ei.value.error_code == "missing_resume_hash"
+    assert ei.value.result == "manual_review"
 
 
 def test_resolve_raises_on_missing_resume(tmp_path):
@@ -102,9 +103,10 @@ def test_resolve_raises_on_resume_hash_mismatch(tmp_path):
 
 def test_resolve_raises_on_missing_cover_letter(tmp_path):
     resume = tmp_path / "cv.pdf"
-    write_pdf(resume)
+    resume_sha = write_pdf(resume)
     job = make_job(
         resume_path=str(resume),
+        resume_sha256=resume_sha,
         cover_letter_path=str(tmp_path / "cover-gone.pdf"),
     )
     with pytest.raises(ArtifactError) as ei:
@@ -117,8 +119,8 @@ def test_resolve_raises_on_missing_cover_letter(tmp_path):
 
 def test_preflight_reports_only_the_problem_jobs(tmp_path):
     good_resume = tmp_path / "good.pdf"
-    write_pdf(good_resume)
-    good = make_job(integration_id="good", resume_path=str(good_resume))
+    good_sha = write_pdf(good_resume)
+    good = make_job(integration_id="good", resume_path=str(good_resume), resume_sha256=good_sha)
     bad = make_job(integration_id="bad", resume_path=str(tmp_path / "missing.pdf"))
     problems = preflight_artifacts([good, bad])
     assert [job.integration_id for job, _ in problems] == ["bad"]

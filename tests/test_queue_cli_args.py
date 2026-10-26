@@ -12,7 +12,9 @@ def test_not_queue_mode_without_flag():
 
 
 def test_config_defaults_are_safe():
-    cfg = queue_config_from_args(parse_queue_args(["--approved-jobs", "q.json"]), default_min_score=4.0)
+    cfg = queue_config_from_args(
+        parse_queue_args(["--approved-jobs", "q.json"]), default_min_score=4.0
+    )
     assert cfg.should_submit is False
     assert cfg.min_score == 4.0
     assert cfg.executor_run_id.startswith("run-")
@@ -24,7 +26,9 @@ def test_submit_flag_enables_submission():
 
 
 def test_dry_run_blocks_submit():
-    cfg = queue_config_from_args(parse_queue_args(["--approved-jobs", "q.json", "--submit", "--dry-run"]))
+    cfg = queue_config_from_args(
+        parse_queue_args(["--approved-jobs", "q.json", "--submit", "--dry-run"])
+    )
     assert cfg.dry_run is True
     assert cfg.should_submit is False
 
@@ -32,7 +36,16 @@ def test_dry_run_blocks_submit():
 def test_explicit_values_round_trip():
     cfg = queue_config_from_args(
         parse_queue_args(
-            ["--approved-jobs", "q.json", "--min-score", "4.5", "--max-jobs", "3", "--executor-run-id", "run-x"]
+            [
+                "--approved-jobs",
+                "q.json",
+                "--min-score",
+                "4.5",
+                "--max-jobs",
+                "3",
+                "--executor-run-id",
+                "run-x",
+            ]
         )
     )
     assert cfg.min_score == 4.5
@@ -41,9 +54,21 @@ def test_explicit_values_round_trip():
 
 
 def test_min_score_defaults_to_queue_value():
-    cfg = queue_config_from_args(parse_queue_args(["--approved-jobs", "q.json"]), default_min_score=3.7)
+    cfg = queue_config_from_args(
+        parse_queue_args(["--approved-jobs", "q.json"]), default_min_score=3.7
+    )
     assert cfg.min_score == 3.7
 
 
+def test_cli_cannot_lower_the_queue_minimum():
+    cfg = queue_config_from_args(
+        parse_queue_args(["--approved-jobs", "q.json", "--min-score", "2.0"]),
+        default_min_score=4.0,
+    )
+    assert cfg.min_score == 4.0
+
+
 def test_unknown_args_are_ignored():
-    assert parse_queue_args(["--approved-jobs", "q.json", "--whatever", "x"]).approved_jobs == "q.json"
+    assert (
+        parse_queue_args(["--approved-jobs", "q.json", "--whatever", "x"]).approved_jobs == "q.json"
+    )

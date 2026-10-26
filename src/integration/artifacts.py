@@ -3,12 +3,15 @@
 career-ops tailors a resume (and optionally a cover letter) per job and names
 the files in the approved-jobs queue, with a SHA-256 of each. The executor must
 upload those exact files — never a bot-generated or stale one — so this module
-resolves each path to an absolute location, confirms it exists, and (when the
-queue carries a hash) confirms the bytes still match what career-ops approved.
+resolves each path to an absolute location, requires its approval hash, and
+confirms the bytes still match what career-ops approved.
 
 This is a pure, browser-free module: the runner gates on it per job, and a
 preflight runs it across the whole queue BEFORE the browser starts, so a missing
 or swapped artifact is caught up front instead of mid-login.
+
+Queues produced by a pre-hardening exporter may not carry hashes. They fail
+closed with ``manual_review`` here and must be regenerated before execution.
 """
 
 from __future__ import annotations
@@ -62,7 +65,7 @@ def sha256_file(path: str) -> str:
 
 
 def _verify_one(path: str, expected_sha256: Optional[str], *, kind: str) -> str:
-    """Resolve ``path`` to absolute, confirm it exists and (if given) matches."""
+    """Resolve ``path`` to absolute, require an approval hash, and verify it."""
     abs_path = os.path.abspath(path)
     if not Path(abs_path).is_file():
         # A named-but-absent artifact is a broken queue, not a decision to make.
@@ -71,17 +74,22 @@ def _verify_one(path: str, expected_sha256: Optional[str], *, kind: str) -> str:
             f"{kind} artifact not found: {abs_path}",
             result="invalid",
         )
-    if expected_sha256:
-        actual = sha256_file(abs_path)
-        if actual != expected_sha256:
-            # The bytes differ from what career-ops approved — never upload a
-            # file the system of record did not vet; stop for manual review.
-            raise ArtifactError(
-                f"{kind}_hash_mismatch",
-                f"{kind} artifact changed since approval "
-                f"(expected {expected_sha256[:12]}…, got {actual[:12]}…): {abs_path}",
-                result="manual_review",
-            )
+    if not expected_sha256:
+        raise ArtifactError(
+            f"missing_{kind}_hash",
+            f"{kind} artifact has no approval hash: {abs_path}",
+            result="manual_review",
+        )
+    actual = sha256_file(abs_path)
+    if actual != expected_sha256:
+        # The bytes differ from what career-ops approved — never upload a
+        # file the system of record did not vet; stop for manual review.
+        raise ArtifactError(
+            f"{kind}_hash_mismatch",
+            f"{kind} artifact changed since approval "
+            f"(expected {expected_sha256[:12]}…, got {actual[:12]}…): {abs_path}",
+            result="manual_review",
+        )
     return abs_path
 
 

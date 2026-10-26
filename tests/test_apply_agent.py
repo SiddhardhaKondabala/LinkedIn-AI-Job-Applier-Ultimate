@@ -33,7 +33,9 @@ async def _apply_with_history(tmp_path, history):
 
 @pytest.mark.asyncio
 async def test_apply_to_job_returns_success_when_agent_succeeds(tmp_path):
-    result = await _apply_with_history(tmp_path, _make_history(True, "Submitted"))
+    result = await _apply_with_history(
+        tmp_path, _make_history(True, "Submitted\nOUTCOME: submitted")
+    )
     assert result == ("Success", "")
 
 

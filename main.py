@@ -472,10 +472,10 @@ async def _run_queue(
     # Phase 8: claim each job before applying so a concurrent or resumed run
     # never double-applies. Claims live next to the results file; without a
     # results path there is nowhere durable to keep them, so claiming is off.
-    claim = release_claim = None
+    claim = release_claim = finalize_claim = None
     if queue_run.get("results_path"):
         claim_store = ClaimStore(str(Path(queue_run["results_path"]).parent / "claims"))
-        claim, release_claim = claimant_from_store(claim_store)
+        claim, release_claim, finalize_claim = claimant_from_store(claim_store)
 
     apply_fn = make_apply_fn(apply_component, allow_external=queue_run["allow_external"])
     results = await process_queue(
@@ -487,6 +487,7 @@ async def _run_queue(
         verify_artifacts=resolve_job_artifacts,  # Phase 6 per-job integrity gate
         claim=claim,  # Phase 8 double-apply guard
         release_claim=release_claim,
+        finalize_claim=finalize_claim,
         reraise=(StopRequested,),  # a stop must halt the run, not become a failed result
     )
     logger.info(
@@ -497,16 +498,6 @@ async def _run_queue(
 
 async def run_queue_mode(args) -> bool:
     """Queue mode: apply to a career-ops approved queue instead of searching."""
-    config_validator = ConfigValidator()
-    secrets = config_validator.validate_secrets()
-    search_config = config_validator.validate_search_config(SEARCH_CONFIG_FILE)
-    resume_text = config_validator.validate_resume_text(RESUME_TEXT_FILE)
-    if not resume_text:
-        resume_text = generate_resume_text_from_pdf(secrets)
-    resume_structured = config_validator.validate_resume_structured(RESUME_STRUCTURED_FILE)
-    if not resume_text and not resume_structured:
-        raise FileNotFoundError("Resume not found for queue-mode run")
-
     # Load + validate the queue BEFORE any browser work (fail fast on a bad queue).
     doc, jobs = load_queue(args.approved_jobs)
     config = queue_config_from_args(args, default_min_score=queue_min_score(doc))
@@ -530,6 +521,35 @@ async def run_queue_mode(args) -> bool:
             f"[queue] {len(problems)}/{len(jobs)} job(s) have artifact problems; "
             "they will be recorded for manual review and skipped during the run."
         )
+
+    # A dry-run is a pure queue/artifact validation pass. Do not validate bot
+    # secrets or initialize resume/LLM/browser components: none are needed, and
+    # doing so made the documented "no browser" mode open a real session.
+    if config.dry_run:
+        writer = ResultWriter(args.results) if args.results else None
+
+        async def unreachable_apply(_job, _config):  # pragma: no cover - runner gate
+            raise AssertionError("dry-run invoked the browser executor")
+
+        results = await process_queue(
+            jobs,
+            unreachable_apply,
+            config,
+            on_result=(writer.append if writer else None),
+            verify_artifacts=resolve_job_artifacts,
+        )
+        logger.info(f"[queue] Dry-run validated {len(results)} job(s); no browser initialized")
+        return True
+
+    config_validator = ConfigValidator()
+    secrets = config_validator.validate_secrets()
+    search_config = config_validator.validate_search_config(SEARCH_CONFIG_FILE)
+    resume_text = config_validator.validate_resume_text(RESUME_TEXT_FILE)
+    if not resume_text:
+        resume_text = generate_resume_text_from_pdf(secrets)
+    resume_structured = config_validator.validate_resume_structured(RESUME_STRUCTURED_FILE)
+    if not resume_text and not resume_structured:
+        raise FileNotFoundError("Resume not found for queue-mode run")
 
     queue_run = {
         "jobs": jobs,
