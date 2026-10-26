@@ -10,7 +10,11 @@ import pytest
 from src.integration.artifacts import ArtifactError
 from src.integration.executor_config import QueueExecutionConfig
 from src.integration.queue_models import ApplicationResult, ApprovedJob
-from src.integration.queue_runner import is_valid_linkedin_url, process_queue
+from src.integration.queue_runner import (
+    ClaimFinalizationError,
+    is_valid_linkedin_url,
+    process_queue,
+)
 from src.integration.schemas import assert_application_result
 
 pytestmark = pytest.mark.asyncio
@@ -281,6 +285,30 @@ async def test_claim_released_on_transient_failure_kept_on_success():
     )
     assert released == ["https://www.linkedin.com/jobs/view/111"]  # only the failed one
     assert finalized == [("https://www.linkedin.com/jobs/view/222", "submitted")]
+
+
+async def test_claim_finalization_failure_records_result_then_halts():
+    recorded = []
+    released = []
+    apply_fn, _ = recorder(result="submitted")
+
+    def fail_finalize(_job, _result):
+        raise OSError("disk unavailable")
+
+    with pytest.raises(ClaimFinalizationError, match="result recorded"):
+        await process_queue(
+            [make_job()],
+            apply_fn,
+            cfg(),
+            on_result=recorded.append,
+            resume_exists=ALWAYS,
+            claim=lambda _j, _r: True,
+            release_claim=lambda j: released.append(j.integration_id),
+            finalize_claim=fail_finalize,
+        )
+
+    assert [result.result for result in recorded] == ["submitted"]
+    assert released == []  # keep the active claim for operator reconciliation
 
 
 async def test_claim_released_when_a_stop_halts_the_run():

@@ -28,6 +28,11 @@ ClaimFn = Callable[[ApprovedJob, str], bool]
 ReleaseFn = Callable[[ApprovedJob], None]
 FinalizeFn = Callable[[ApprovedJob, str], None]
 
+
+class ClaimFinalizationError(RuntimeError):
+    """A terminal result was recorded but its claim could not be finalized."""
+
+
 _LINKEDIN_JOB_RE = re.compile(
     r"^https?://([a-z0-9-]+\.)*linkedin\.com/(?:jobs/view/|comm/jobs/view/)\d+", re.I
 )
@@ -209,7 +214,19 @@ async def process_queue(
         # could later expire and reopen the job.
         if res.result in KEEP_CLAIM_RESULTS:
             if finalize_claim is not None:
-                finalize_claim(job, res.result)
+                try:
+                    finalize_claim(job, res.result)
+                except Exception as exc:
+                    # Preserve the confirmed outcome in the durable result
+                    # journal, but stop the run loudly. Continuing would hide a
+                    # claim that is still active and may become reclaimable at
+                    # its TTL; an operator must reconcile it before retrying.
+                    record(res)
+                    attempted += 1
+                    raise ClaimFinalizationError(
+                        f"result recorded but terminal claim finalization failed "
+                        f"for {job.integration_id}; do not retry automatically"
+                    ) from exc
         record(res)
         attempted += 1
         # Transient outcomes are retryable only after their durable result has

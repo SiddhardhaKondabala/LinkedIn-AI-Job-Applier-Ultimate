@@ -14,6 +14,12 @@ human-needed stop, and released for a transient failure so a later run retries.
 An abandoned in-progress claim expires after a configurable timeout (24 hours
 by default); a finalized submission or human-needed stop is terminal and never
 expires.
+
+Expiry is lazy: ``try_claim()``, ``is_claimed()``, and ``owner()`` remove an
+expired active claim while holding its per-job lock. The sibling ``.lock`` file
+is a stable coordination inode and intentionally remains after claim cleanup;
+there is at most one per integration id and deleting it could split the lock
+between concurrent processes.
 """
 
 from __future__ import annotations
@@ -30,6 +36,10 @@ from .filelock import file_lock
 from .queue_models import ApprovedJob, utc_now_iso
 
 DEFAULT_CLAIM_TIMEOUT_SECONDS = 24 * 60 * 60
+
+
+class ClaimStateError(RuntimeError):
+    """A terminal result could not be made durable in its claim file."""
 
 
 def configured_claim_timeout_seconds() -> float:
@@ -114,8 +124,16 @@ class ClaimStore:
         with file_lock(self._lock_path(integration_id)):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError):
-                return
+            except FileNotFoundError as exc:
+                raise ClaimStateError(
+                    f"cannot finalize missing claim for {integration_id}"
+                ) from exc
+            except json.JSONDecodeError as exc:
+                raise ClaimStateError(
+                    f"cannot finalize malformed claim for {integration_id}"
+                ) from exc
+            if not isinstance(data, dict):
+                raise ClaimStateError(f"cannot finalize malformed claim for {integration_id}")
             data.update({"state": "terminal", "result": result, "finished_at": utc_now_iso()})
             tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
             try:

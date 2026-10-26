@@ -5,8 +5,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
+import pytest
+
 from src.integration.claims import (
     KEEP_CLAIM_RESULTS,
+    ClaimStateError,
     ClaimStore,
     claimant_from_store,
 )
@@ -50,6 +53,15 @@ def test_release_reopens_the_job(tmp_path):
 
 def test_release_missing_claim_is_safe(tmp_path):
     ClaimStore(str(tmp_path / "claims")).release("never-claimed")  # no error
+
+
+def test_lock_file_is_stable_after_claim_release(tmp_path):
+    store = ClaimStore(str(tmp_path / "claims"))
+    assert store.try_claim("linkedin:111", "run-a") is True
+    lock_path = store._lock_path("linkedin:111")
+    assert lock_path.exists()
+    store.release("linkedin:111")
+    assert lock_path.exists()  # deleting a live coordination inode is unsafe
 
 
 def test_expired_claim_is_reclaimed(tmp_path):
@@ -117,6 +129,16 @@ def test_terminal_claim_never_expires(tmp_path):
     os.utime(path, (0, 0))
     assert store.try_claim("linkedin:111", "run-b") is False
     assert store.owner("linkedin:111") == "run-a"
+
+
+@pytest.mark.parametrize("contents", [None, "not json", "[]"])
+def test_finalize_refuses_missing_or_malformed_claim(tmp_path, contents):
+    store = ClaimStore(str(tmp_path / "claims"))
+    store.dir.mkdir(parents=True)
+    if contents is not None:
+        store._path("linkedin:111").write_text(contents, encoding="utf-8")
+    with pytest.raises(ClaimStateError, match="cannot finalize"):
+        store.finalize("linkedin:111", "submitted")
 
 
 def test_keep_claim_results_are_terminal_only():

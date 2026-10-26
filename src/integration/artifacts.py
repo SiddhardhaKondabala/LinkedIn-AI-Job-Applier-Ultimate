@@ -9,6 +9,9 @@ confirms the bytes still match what career-ops approved.
 This is a pure, browser-free module: the runner gates on it per job, and a
 preflight runs it across the whole queue BEFORE the browser starts, so a missing
 or swapped artifact is caught up front instead of mid-login.
+
+Queues produced by a pre-hardening exporter may not carry hashes. They fail
+closed with ``manual_review`` here and must be regenerated before execution.
 """
 
 from __future__ import annotations
